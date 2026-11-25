@@ -1,5 +1,15 @@
 import * as pdfjs from '/vendor/pdfjs/build/pdf.mjs';
 import { destinationPosition, isSupportedLink, resolveDestination } from './pdf-links.js';
+import {
+  computeReadingPosition,
+  computeScrollTop,
+  loadLocalReadingState,
+  mergeReadingStates,
+  normalizeZoom,
+  paperIdFromPath,
+  paperPath,
+  saveLocalReadingState
+} from './reading-progress.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/build/pdf.worker.mjs';
 
@@ -8,7 +18,9 @@ const library = $('#library');
 const reader = $('#reader');
 const pages = $('#pages');
 const dialog = $('#citation-dialog');
+const defaultEmptyHtml = $('#empty').innerHTML;
 let papers = [];
+let readingState = loadLocalReadingState();
 let currentId = null;
 let pdf = null;
 let observer = null;
@@ -18,12 +30,97 @@ let zoom = 1;
 let selectedText = '';
 let dialogSession = 0;
 let layoutReady = Promise.resolve();
+let hasLaidOutCurrentPaper = false;
+let isRestoringPosition = false;
+let progressSaveTimer = null;
+let lastSentKey = '';
 
 async function api(url, options) {
   const response = await fetch(url, options);
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
   return result;
+}
+
+function getPageMetrics() {
+  const readerRect = reader.getBoundingClientRect();
+  return Array.from(pages.querySelectorAll('.page'), element => ({
+    page: Number(element.dataset.page),
+    top: element.getBoundingClientRect().top - readerRect.top + reader.scrollTop,
+    height: element.clientHeight
+  }));
+}
+
+function getCurrentPosition() {
+  return computeReadingPosition(getPageMetrics(), reader.scrollTop);
+}
+
+function recordLocalProgress(paperId, { page, offset, zoom: nextZoom, opened = true }) {
+  const now = new Date().toISOString();
+  const existing = readingState.positions[paperId];
+  const entry = {
+    page,
+    offset,
+    zoom: nextZoom,
+    last_opened_at: opened === false && existing?.last_opened_at ? existing.last_opened_at : now,
+    updated_at: now
+  };
+  readingState = {
+    lastPaperId: opened === false ? (readingState.lastPaperId ?? paperId) : paperId,
+    positions: { ...readingState.positions, [paperId]: entry }
+  };
+  saveLocalReadingState(readingState);
+  return entry;
+}
+
+function sendProgressToServer(paperId, payload, { keepalive = false } = {}) {
+  const key = `${paperId}:${payload.page}:${payload.offset}:${payload.zoom}:${payload.opened !== false}`;
+  if (!keepalive && key === lastSentKey) return;
+  lastSentKey = key;
+  const url = `/api/papers/${encodeURIComponent(paperId)}/progress`;
+  const body = JSON.stringify(payload);
+  if (keepalive && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+    try {
+      if (navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
+    } catch {
+      // Fall through to keepalive fetch.
+    }
+  }
+  fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    keepalive
+  }).catch(() => {});
+}
+
+function flushReadingProgress({ keepalive = false, opened = true } = {}) {
+  clearTimeout(progressSaveTimer);
+  progressSaveTimer = null;
+  if (!currentId || !hasLaidOutCurrentPaper) return;
+  const pos = getCurrentPosition();
+  if (!pos) return;
+  const payload = { page: pos.page, offset: pos.offset, zoom, opened };
+  recordLocalProgress(currentId, payload);
+  sendProgressToServer(currentId, payload, { keepalive });
+}
+
+function scheduleReadingProgressSave() {
+  if (!currentId || !hasLaidOutCurrentPaper || isRestoringPosition) return;
+  const pos = getCurrentPosition();
+  if (!pos) return;
+  recordLocalProgress(currentId, { page: pos.page, offset: pos.offset, zoom, opened: true });
+  clearTimeout(progressSaveTimer);
+  const targetId = currentId;
+  progressSaveTimer = setTimeout(() => {
+    progressSaveTimer = null;
+    if (currentId !== targetId || !hasLaidOutCurrentPaper) return;
+    const latest = getCurrentPosition();
+    if (!latest) return;
+    const payload = { page: latest.page, offset: latest.offset, zoom, opened: true };
+    recordLocalProgress(targetId, payload);
+    sendProgressToServer(targetId, payload);
+  }, 400);
 }
 
 function showLibrary(open) {
@@ -35,8 +132,7 @@ function showLibrary(open) {
 $('#library-toggle').addEventListener('click', () => showLibrary(!library.classList.contains('open')));
 showLibrary(window.matchMedia('(min-width: 701px)').matches);
 
-async function refreshLibrary() {
-  ({ papers } = await api('/api/papers'));
+function renderLibraryList() {
   const list = $('#paper-list');
   list.replaceChildren();
   for (const paper of papers) {
@@ -49,31 +145,89 @@ async function refreshLibrary() {
   if (!papers.length) list.textContent = 'No papers yet.';
 }
 
+async function refreshLibrary() {
+  const data = await api('/api/papers');
+  papers = data.papers;
+  const validIds = new Set(papers.map(paper => paper.id));
+  readingState = mergeReadingStates(data.readingState, loadLocalReadingState(), validIds);
+  saveLocalReadingState(readingState);
+  renderLibraryList();
+}
+
 $('#add-paper').addEventListener('click', () => {
   showLibrary(false);
   openSearchDialog({ title: 'Find a paper', hint: 'Search for a paper by title or DOI.', text: '', label: 'Paper title or DOI' });
 });
 
-async function openPaper(id) {
+function closePaper({ history = 'none' } = {}) {
+  flushReadingProgress({ opened: false });
+  generation++;
+  observer?.disconnect();
+  if (pdf) {
+    pdf.destroy();
+    pdf = null;
+  }
+  currentId = null;
+  hasLaidOutCurrentPaper = false;
+  zoom = 1;
+  $('#zoom-level').textContent = '100%';
+  $('#zoom-controls').hidden = true;
+  $('#current-title').textContent = 'Your research library';
+  document.title = 'Paper Reader';
+  $('#empty').innerHTML = defaultEmptyHtml;
+  $('#empty').hidden = false;
+  pages.replaceChildren();
+  $('#find-selection').hidden = true;
+  $('#reader-status').hidden = true;
+  if (history === 'push' && window.location.pathname !== '/') {
+    window.history.pushState({}, '', '/');
+  } else if (history === 'replace' && window.location.pathname !== '/') {
+    window.history.replaceState({}, '', '/');
+  }
+  renderLibraryList();
+}
+
+async function openPaper(id, { history = 'push', restore = true } = {}) {
   const paper = papers.find(item => item.id === id);
   if (!paper) return;
+  if (currentId && currentId !== id) {
+    flushReadingProgress({ opened: false });
+  }
   const thisGeneration = ++generation;
   observer?.disconnect();
   if (pdf) {
     pdf.destroy();
     pdf = null;
   }
+  const saved = restore ? readingState.positions[id] : null;
   currentId = id;
-  zoom = 1;
-  $('#zoom-level').textContent = '100%';
+  hasLaidOutCurrentPaper = false;
+  zoom = normalizeZoom(saved?.zoom);
+  $('#zoom-level').textContent = `${Math.round(zoom * 100)}%`;
   $('#zoom-controls').hidden = false;
   $('#current-title').textContent = paper.title;
+  document.title = `${paper.title} · Paper Reader`;
   $('#empty').hidden = true;
   pages.replaceChildren();
   $('#find-selection').hidden = true;
   $('#reader-status').hidden = true;
+  $('#library-status').textContent = '';
   showLibrary(false);
-  refreshLibrary().catch(error => { $('#library-status').textContent = error.message; });
+  const targetPath = paperPath(id);
+  if (history === 'push' && window.location.pathname !== targetPath) {
+    window.history.pushState({ paperId: id }, '', targetPath);
+  } else if (history === 'replace' && window.location.pathname !== targetPath) {
+    window.history.replaceState({ paperId: id }, '', targetPath);
+  }
+  renderLibraryList();
+  const initialPayload = {
+    page: saved?.page ?? 1,
+    offset: saved?.offset ?? 0,
+    zoom,
+    opened: true
+  };
+  recordLocalProgress(id, initialPayload);
+  sendProgressToServer(id, initialPayload);
   try {
     const loadingTask = pdfjs.getDocument(`/api/papers/${encodeURIComponent(id)}/file`);
     const document = await loadingTask.promise;
@@ -82,9 +236,17 @@ async function openPaper(id) {
       return;
     }
     pdf = document;
+    isRestoringPosition = true;
     await layoutPages(document, thisGeneration);
-    reader.scrollTop = 0;
+    if (generation !== thisGeneration) {
+      isRestoringPosition = false;
+      return;
+    }
+    reader.scrollTop = saved ? computeScrollTop(getPageMetrics(), saved) : 0;
+    hasLaidOutCurrentPaper = true;
+    requestAnimationFrame(() => { isRestoringPosition = false; });
   } catch (error) {
+    isRestoringPosition = false;
     if (generation === thisGeneration) {
       $('#empty').hidden = false;
       $('#empty').textContent = `Unable to open PDF: ${error.message}`;
@@ -134,14 +296,28 @@ async function buildPageLayout(document, thisGeneration) {
 async function changeZoom(delta) {
   if (!pdf) return;
   const previous = zoom;
-  zoom = Math.max(1, Math.min(2.5, Math.round((zoom + delta) * 4) / 4));
+  zoom = normalizeZoom(zoom + delta);
   if (zoom === previous) return;
-  const scrollTop = reader.scrollTop * zoom / previous;
+  const thisGeneration = generation;
+  const pos = getCurrentPosition();
   $('#zoom-level').textContent = `${Math.round(zoom * 100)}%`;
   try {
-    await layoutPages(pdf, generation);
-    reader.scrollTop = scrollTop;
+    isRestoringPosition = true;
+    await layoutPages(pdf, thisGeneration);
+    if (generation !== thisGeneration) {
+      isRestoringPosition = false;
+      return;
+    }
+    reader.scrollTop = pos ? computeScrollTop(getPageMetrics(), pos) : 0;
+    const nextPos = pos || getCurrentPosition();
+    if (nextPos && currentId) {
+      const payload = { page: nextPos.page, offset: nextPos.offset, zoom, opened: true };
+      recordLocalProgress(currentId, payload);
+      sendProgressToServer(currentId, payload);
+    }
+    requestAnimationFrame(() => { isRestoringPosition = false; });
   } catch (error) {
+    isRestoringPosition = false;
     $('#library-status').textContent = error.message;
   }
 }
@@ -250,15 +426,39 @@ new ResizeObserver(() => {
     if (!pdf) return;
     const document = pdf;
     const currentGeneration = generation;
-    const progress = reader.scrollHeight ? reader.scrollTop / reader.scrollHeight : 0;
+    const pos = getCurrentPosition();
     const nextLayout = layoutVersion + 1;
+    isRestoringPosition = true;
     layoutPages(document, currentGeneration).then(() => {
       if (pdf === document && generation === currentGeneration && layoutVersion === nextLayout) {
-        reader.scrollTop = progress * reader.scrollHeight;
+        reader.scrollTop = pos ? computeScrollTop(getPageMetrics(), pos) : 0;
       }
-    }).catch(error => { $('#library-status').textContent = error.message; });
+      requestAnimationFrame(() => { isRestoringPosition = false; });
+    }).catch(error => {
+      isRestoringPosition = false;
+      $('#library-status').textContent = error.message;
+    });
   }, 300);
 }).observe(reader);
+
+reader.addEventListener('scroll', scheduleReadingProgressSave, { passive: true });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushReadingProgress({ keepalive: true });
+});
+window.addEventListener('pagehide', () => flushReadingProgress({ keepalive: true }));
+
+window.addEventListener('popstate', () => {
+  const routeId = paperIdFromPath(window.location.pathname);
+  if (routeId && papers.some(paper => paper.id === routeId)) {
+    if (routeId !== currentId) openPaper(routeId, { history: 'none' });
+  } else {
+    if (routeId) {
+      window.history.replaceState({}, '', '/');
+      $('#library-status').textContent = 'The requested paper is no longer in your library.';
+    }
+    closePaper({ history: 'none' });
+  }
+});
 
 document.addEventListener('selectionchange', () => {
   const selection = window.getSelection();
@@ -377,4 +577,23 @@ $('#search-citation').addEventListener('click', async () => {
   }
 });
 
-refreshLibrary().catch(error => { $('#library-status').textContent = error.message; });
+async function boot() {
+  await refreshLibrary();
+  const routeId = paperIdFromPath(window.location.pathname);
+  if (routeId) {
+    if (papers.some(paper => paper.id === routeId)) {
+      await openPaper(routeId, { history: 'replace' });
+    } else {
+      window.history.replaceState({}, '', '/');
+      $('#library-status').textContent = 'The requested paper is no longer in your library.';
+      showLibrary(true);
+    }
+    return;
+  }
+  const lastId = readingState.lastPaperId;
+  if (lastId && papers.some(paper => paper.id === lastId)) {
+    await openPaper(lastId, { history: 'replace' });
+  }
+}
+
+boot().catch(error => { $('#library-status').textContent = error.message; });
