@@ -1,8 +1,10 @@
 import * as pdfjs from '/vendor/pdfjs/build/pdf.mjs';
 import { destinationPosition, isSupportedLink, resolveDestination } from './pdf-links.js';
 import {
+  categorizePapers,
   computeReadingPosition,
   computeScrollTop,
+  formatPaperTimestamp,
   loadLocalReadingState,
   mergeReadingStates,
   normalizeZoom,
@@ -22,6 +24,7 @@ const defaultEmptyHtml = $('#empty').innerHTML;
 let papers = [];
 let readingState = loadLocalReadingState();
 let currentId = null;
+let loadingPaperId = null;
 let pdf = null;
 let observer = null;
 let generation = 0;
@@ -127,6 +130,7 @@ function showLibrary(open) {
   library.classList.toggle('open', open);
   $('#library-toggle').setAttribute('aria-expanded', String(open));
   $('#library-toggle').setAttribute('aria-label', open ? 'Hide library' : 'Show library');
+  if (open && papers.length) renderLibraryList();
 }
 
 $('#library-toggle').addEventListener('click', () => showLibrary(!library.classList.contains('open')));
@@ -135,14 +139,46 @@ showLibrary(window.matchMedia('(min-width: 701px)').matches);
 function renderLibraryList() {
   const list = $('#paper-list');
   list.replaceChildren();
-  for (const paper of papers) {
-    const button = document.createElement('button');
-    button.className = `paper${paper.id === currentId ? ' active' : ''}`;
-    button.textContent = paper.title;
-    button.addEventListener('click', () => openPaper(paper.id));
-    list.append(button);
+  if (!papers.length) {
+    list.textContent = 'No papers yet.';
+    return;
   }
-  if (!papers.length) list.textContent = 'No papers yet.';
+  const { unread, read } = categorizePapers(papers, readingState.positions);
+  const now = new Date();
+  const sections = [
+    { heading: 'Unread', emptyText: 'No unread papers.', items: unread },
+    { heading: 'Read', emptyText: 'No read papers yet.', items: read }
+  ];
+  for (const section of sections) {
+    const group = document.createElement('div');
+    group.className = 'paper-section';
+    const heading = document.createElement('h2');
+    heading.className = 'paper-section-title';
+    heading.textContent = section.heading;
+    group.append(heading);
+    if (!section.items.length) {
+      const empty = document.createElement('p');
+      empty.className = 'paper-section-empty';
+      empty.textContent = section.emptyText;
+      group.append(empty);
+    } else {
+      for (const { paper, timestamp } of section.items) {
+        const button = document.createElement('button');
+        button.className = `paper${paper.id === currentId ? ' active' : ''}`;
+        button.title = paper.title;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'paper-title';
+        titleEl.textContent = paper.title;
+        const timeEl = document.createElement('span');
+        timeEl.className = 'paper-time';
+        timeEl.textContent = formatPaperTimestamp(timestamp, now);
+        button.append(titleEl, timeEl);
+        button.addEventListener('click', () => openPaper(paper.id));
+        group.append(button);
+      }
+    }
+    list.append(group);
+  }
 }
 
 async function refreshLibrary() {
@@ -168,6 +204,7 @@ function closePaper({ history = 'none' } = {}) {
     pdf = null;
   }
   currentId = null;
+  loadingPaperId = null;
   hasLaidOutCurrentPaper = false;
   zoom = 1;
   $('#zoom-level').textContent = '100%';
@@ -190,6 +227,16 @@ function closePaper({ history = 'none' } = {}) {
 async function openPaper(id, { history = 'push', restore = true } = {}) {
   const paper = papers.find(item => item.id === id);
   if (!paper) return;
+  if (id === currentId && (pdf || loadingPaperId === id)) {
+    showLibrary(false);
+    const targetPath = paperPath(id);
+    if (history === 'push' && window.location.pathname !== targetPath) {
+      window.history.pushState({ paperId: id }, '', targetPath);
+    } else if (history === 'replace' && window.location.pathname !== targetPath) {
+      window.history.replaceState({ paperId: id }, '', targetPath);
+    }
+    return;
+  }
   if (currentId && currentId !== id) {
     flushReadingProgress({ opened: false });
   }
@@ -201,6 +248,7 @@ async function openPaper(id, { history = 'push', restore = true } = {}) {
   }
   const saved = restore ? readingState.positions[id] : null;
   currentId = id;
+  loadingPaperId = id;
   hasLaidOutCurrentPaper = false;
   zoom = normalizeZoom(saved?.zoom);
   $('#zoom-level').textContent = `${Math.round(zoom * 100)}%`;
@@ -219,7 +267,6 @@ async function openPaper(id, { history = 'push', restore = true } = {}) {
   } else if (history === 'replace' && window.location.pathname !== targetPath) {
     window.history.replaceState({ paperId: id }, '', targetPath);
   }
-  renderLibraryList();
   const initialPayload = {
     page: saved?.page ?? 1,
     offset: saved?.offset ?? 0,
@@ -227,6 +274,7 @@ async function openPaper(id, { history = 'push', restore = true } = {}) {
     opened: true
   };
   recordLocalProgress(id, initialPayload);
+  renderLibraryList();
   sendProgressToServer(id, initialPayload);
   try {
     const loadingTask = pdfjs.getDocument(`/api/papers/${encodeURIComponent(id)}/file`);
@@ -251,6 +299,8 @@ async function openPaper(id, { history = 'push', restore = true } = {}) {
       $('#empty').hidden = false;
       $('#empty').textContent = `Unable to open PDF: ${error.message}`;
     }
+  } finally {
+    if (generation === thisGeneration) loadingPaperId = null;
   }
 }
 

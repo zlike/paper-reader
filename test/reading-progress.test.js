@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   STORAGE_KEY,
+  categorizePapers,
   computeReadingPosition,
   computeScrollTop,
+  formatPaperTimestamp,
   loadLocalReadingState,
   mergeReadingStates,
   normalizeZoom,
@@ -96,4 +98,40 @@ test('localStorage helpers and zoom normalization handle edge cases', () => {
   assert.equal(normalizeZoom(5), 2.5);
   assert.equal(normalizeZoom(0.2), 1);
   assert.equal(normalizeZoom(null), 1);
+});
+
+test('formatPaperTimestamp formats today as HH:MM today and older dates as MM/DD', () => {
+  const now = new Date(2026, 10, 25, 14, 30, 0); // Nov 25, 2026 14:30 local
+  const earlierToday = new Date(2026, 10, 25, 9, 5, 0).toISOString();
+  const yesterday = new Date(2026, 10, 24, 22, 15, 0).toISOString();
+  const earlierMonth = new Date(2026, 2, 8, 12, 0, 0).toISOString();
+
+  assert.equal(formatPaperTimestamp(earlierToday, now), '09:05 today');
+  assert.equal(formatPaperTimestamp(yesterday, now), '11/24');
+  assert.equal(formatPaperTimestamp(earlierMonth, now), '03/08');
+  assert.equal(formatPaperTimestamp(null, now), '');
+  assert.equal(formatPaperTimestamp('not-a-date', now), '');
+});
+
+test('categorizePapers splits Unread and Read and sorts by created_at or last_opened_at', () => {
+  const list = [
+    { id: 'u1', title: 'Older unread', created_at: '2026-11-20T10:00:00.000Z' },
+    { id: 'u2', title: 'Newer unread', created_at: '2026-11-25T10:00:00.000Z' },
+    { id: 'r1', title: 'Older read', created_at: '2026-11-24T10:00:00.000Z' },
+    { id: 'r2', title: 'Recent read', created_at: '2026-11-18T10:00:00.000Z' }
+  ];
+  const positions = {
+    r1: { page: 2, offset: 0.1, last_opened_at: '2026-11-24T12:00:00.000Z' },
+    r2: { page: 5, offset: 0.5, last_opened_at: '2026-11-25T14:00:00.000Z' }
+  };
+
+  const { unread, read } = categorizePapers(list, positions);
+  assert.deepEqual(unread.map(x => [x.paper.id, x.timestamp]), [
+    ['u2', '2026-11-25T10:00:00.000Z'],
+    ['u1', '2026-11-20T10:00:00.000Z']
+  ]);
+  assert.deepEqual(read.map(x => [x.paper.id, x.timestamp]), [
+    ['r2', '2026-11-25T14:00:00.000Z'],
+    ['r1', '2026-11-24T12:00:00.000Z']
+  ]);
 });

@@ -122,3 +122,36 @@ export function saveLocalReadingState(state, storage = globalThis.localStorage) 
     // Ignore storage quota or private-mode errors.
   }
 }
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+export function formatPaperTimestamp(isoString, now = new Date()) {
+  if (typeof isoString !== 'string' || !isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  const isToday = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  if (isToday) {
+    return `${pad2(date.getHours())}:${pad2(date.getMinutes())} today`;
+  }
+  return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+}
+
+export function categorizePapers(papers, positions = {}) {
+  const unread = [];
+  const read = [];
+  for (const paper of papers || []) {
+    const lastOpenedAt = positions?.[paper.id]?.last_opened_at || null;
+    if (lastOpenedAt) {
+      read.push({ paper, timestamp: lastOpenedAt });
+    } else {
+      unread.push({ paper, timestamp: paper.created_at || null });
+    }
+  }
+  unread.sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
+  read.sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
+  return { unread, read };
+}
