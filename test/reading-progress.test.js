@@ -12,7 +12,7 @@ import {
   paperIdFromPath,
   paperPath,
   saveLocalReadingState
-} from '../public/reading-progress.js';
+} from '../web/src/lib/reading-progress.js';
 
 test('paper path parsing and formatting handle encoded IDs and non-paper routes', () => {
   assert.equal(paperPath('abc-123'), '/papers/abc-123');
