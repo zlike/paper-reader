@@ -40,7 +40,42 @@ export function createApp(storage, services = {}) {
   app.use('/vendor/pdfjs', express.static(path.join(root, 'node_modules', 'pdfjs-dist'), { fallthrough: false }));
   app.use(express.static(path.join(root, 'public')));
 
-  app.get('/api/papers', (_req, res) => res.json({ papers: storage.list() }));
+  app.get('/api/papers', (_req, res) => res.json({
+    papers: storage.list(),
+    readingState: storage.getReadingState()
+  }));
+  app.get('/api/reading-state', (_req, res) => res.json(storage.getReadingState()));
+  const saveProgress = (req, res) => {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        return res.status(400).json({ error: 'Invalid reading progress payload' });
+      }
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Invalid reading progress payload' });
+    }
+    const { page, offset, zoom, opened } = body;
+    if (page !== undefined && (!Number.isInteger(page) || page < 1)) {
+      return res.status(400).json({ error: 'Page must be a positive integer' });
+    }
+    if (offset !== undefined && (typeof offset !== 'number' || !Number.isFinite(offset) || offset < 0 || offset > 1)) {
+      return res.status(400).json({ error: 'Offset must be a number between 0 and 1' });
+    }
+    if (zoom !== undefined && zoom !== null && (typeof zoom !== 'number' || !Number.isFinite(zoom) || zoom < 0.5 || zoom > 4)) {
+      return res.status(400).json({ error: 'Zoom must be a number between 0.5 and 4' });
+    }
+    if (opened !== undefined && typeof opened !== 'boolean') {
+      return res.status(400).json({ error: 'Opened must be a boolean' });
+    }
+    const progress = storage.saveReadingProgress(req.params.id, { page, offset, zoom, opened });
+    if (!progress) return res.status(404).json({ error: 'Paper not found' });
+    res.json({ progress });
+  };
+  app.put('/api/papers/:id/progress', saveProgress);
+  app.post('/api/papers/:id/progress', express.text({ type: 'text/plain', limit: '4kb' }), saveProgress);
   app.get('/api/papers/:id/file', (req, res, next) => {
     if (!storage.get(req.params.id)) return res.status(404).json({ error: 'Paper not found' });
     res.type('application/pdf').sendFile(storage.filePath(req.params.id), error => {
@@ -99,6 +134,14 @@ export function createApp(storage, services = {}) {
       await storage.removeTemp(temp);
     }
   }));
+  app.get('*', (req, res, next) => {
+    if (req.path === '/api' || req.path.startsWith('/api/') || req.path.startsWith('/vendor/')) return next();
+    if (!req.path.startsWith('/papers/') && path.extname(req.path)) return next();
+    if (!req.accepts('html')) return next();
+    res.sendFile(path.join(root, 'public', 'index.html'), error => {
+      if (error) next(error);
+    });
+  });
   app.use((error, _req, res, _next) => {
     console.error(error);
     if (res.headersSent) return;
