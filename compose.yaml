@@ -1,0 +1,13 @@
+services:
+  paper-reader:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-3000}:3000"
+    environment:
+      MAX_PDF_MB: "${MAX_PDF_MB:-50}"
+      MAX_STORAGE_MB: "${MAX_STORAGE_MB:-1024}"
+    volumes:
+      - papers:/data
+volumes:
+  papers:

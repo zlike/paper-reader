@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>Paper Reader</title>
+  <link rel="stylesheet" href="/vendor/pdfjs/web/pdf_viewer.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <button id="library-toggle" class="icon" aria-label="Show library" aria-expanded="false" aria-controls="library">☰</button>
+    <strong>Paper Reader</strong>
+    <span id="current-title">Your research library</span>
+    <div id="zoom-controls" hidden>
+      <button id="zoom-out" class="icon" aria-label="Zoom out">−</button>
+      <span id="zoom-level">100%</span>
+      <button id="zoom-in" class="icon" aria-label="Zoom in">+</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside id="library" aria-label="Paper library">
+      <div class="library-heading"><h1>Library</h1><button id="add-paper" class="primary">+ Add PDF</button></div>
+      <p class="hint">Select text in a paper to find a cited paper.</p>
+      <div id="library-status" role="status"></div>
+      <nav id="paper-list" aria-label="Papers"></nav>
+    </aside>
+    <main id="reader">
+      <div id="reader-status" role="status" hidden></div>
+      <div id="empty"><h2>Your papers, in one place.</h2><p>Search for a paper to start reading.</p></div>
+      <div id="pages"></div>
+    </main>
+  </div>
+  <button id="find-selection" hidden>Find cited paper</button>
+  <dialog id="citation-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header"><h2 id="dialog-title">Find a cited paper</h2><button id="close-dialog" class="icon" aria-label="Close">✕</button></div>
+    <p id="dialog-hint" class="hint">Check the text below. For numbered citations, select the full reference from the bibliography instead.</p>
+    <textarea id="citation-text" rows="4" maxlength="4000" aria-label="Citation text"></textarea>
+    <button id="search-citation" class="primary">Search</button>
+    <div id="search-status" role="status"></div>
+    <div id="results"></div>
+  </dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
