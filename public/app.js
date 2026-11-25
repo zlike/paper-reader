@@ -17,6 +17,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/build/pdf.worker.mjs';
 
 const $ = selector => document.querySelector(selector);
 const library = $('#library');
+const libraryBackdrop = $('#library-backdrop');
 const reader = $('#reader');
 const pages = $('#pages');
 const dialog = $('#citation-dialog');
@@ -128,13 +129,20 @@ function scheduleReadingProgressSave() {
 
 function showLibrary(open) {
   library.classList.toggle('open', open);
+  libraryBackdrop.hidden = !open;
   $('#library-toggle').setAttribute('aria-expanded', String(open));
   $('#library-toggle').setAttribute('aria-label', open ? 'Hide library' : 'Show library');
   if (open && papers.length) renderLibraryList();
 }
 
 $('#library-toggle').addEventListener('click', () => showLibrary(!library.classList.contains('open')));
-showLibrary(window.matchMedia('(min-width: 701px)').matches);
+libraryBackdrop.addEventListener('click', () => showLibrary(false));
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && library.classList.contains('open') && !dialog.open) {
+    showLibrary(false);
+  }
+});
+showLibrary(false);
 
 function renderLibraryList() {
   const list = $('#paper-list');
@@ -643,6 +651,8 @@ async function boot() {
   const lastId = readingState.lastPaperId;
   if (lastId && papers.some(paper => paper.id === lastId)) {
     await openPaper(lastId, { history: 'replace' });
+  } else {
+    showLibrary(true);
   }
 }
 

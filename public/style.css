@@ -10,9 +10,13 @@ header strong { white-space: nowrap; }
 #current-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #cbd5e1; font-size: .9rem; flex: 1; }
 #zoom-controls:not([hidden]) { display: flex; align-items: center; gap: 2px; white-space: nowrap; font-size: .8rem; }
 .icon { border: 0; background: transparent; color: inherit; font-size: 1.3rem; padding: 7px; }
-.layout { position: relative; display: flex; flex: 1; min-height: 0; }
-aside { display: none; width: 300px; flex: 0 0 300px; background: white; border-right: 1px solid #d5dce5; padding: 20px 16px max(20px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); overflow-y: auto; overscroll-behavior: contain; }
-aside.open { display: block; }
+.layout { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
+#library-backdrop { position: absolute; inset: 0; z-index: 5; background: rgba(16, 24, 39, 0.35); }
+aside { position: absolute; z-index: 6; top: 0; bottom: 0; left: 0; width: min(88vw, 330px); background: white; border-right: 1px solid #d5dce5; box-shadow: 4px 0 24px #0003; padding: 20px 16px max(20px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); overflow-y: auto; overscroll-behavior: contain; transform: translateX(-100%); visibility: hidden; pointer-events: none; transition: transform .18s ease, visibility .18s ease; }
+aside.open { transform: translateX(0); visibility: visible; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) {
+  aside { transition: none; }
+}
 .library-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 h1 { font-size: 1.25rem; margin: 0; }
 h2 { font-size: 1.2rem; }
@@ -48,7 +52,6 @@ textarea { width: 100%; resize: vertical; border: 1px solid #aeb8c7; border-radi
 .result p { margin: 5px 0 10px; }
 .result button { border: 1px solid #315ed8; color: #315ed8; background: white; border-radius: 6px; padding: 8px 11px; font-weight: 600; }
 @media (max-width: 700px) {
-  aside { position: absolute; z-index: 3; top: 0; bottom: 0; left: 0; width: min(88vw, 330px); box-shadow: 4px 0 18px #0003; }
   #pages { padding: 8px 0; gap: 8px; }
   header strong { display: none; }
 }
