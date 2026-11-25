@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,9 @@ import { searchCitation, getCandidate } from './citations.js';
 import { downloadPdf } from './download.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const distDir = path.join(root, 'dist');
+const publicDir = path.join(root, 'public');
+const webDir = path.join(root, 'web');
 
 export function createApp(storage, services = {}) {
   const app = express();
@@ -38,7 +42,8 @@ export function createApp(storage, services = {}) {
   });
   app.use(express.json({ limit: '16kb' }));
   app.use('/vendor/pdfjs', express.static(path.join(root, 'node_modules', 'pdfjs-dist'), { fallthrough: false }));
-  app.use(express.static(path.join(root, 'public')));
+  app.use(express.static(distDir));
+  app.use(express.static(publicDir));
 
   app.get('/api/papers', (_req, res) => res.json({
     papers: storage.list(),
@@ -138,7 +143,10 @@ export function createApp(storage, services = {}) {
     if (req.path === '/api' || req.path.startsWith('/api/') || req.path.startsWith('/vendor/')) return next();
     if (!req.path.startsWith('/papers/') && path.extname(req.path)) return next();
     if (!req.accepts('html')) return next();
-    res.sendFile(path.join(root, 'public', 'index.html'), error => {
+    const indexPath = existsSync(path.join(distDir, 'index.html'))
+      ? path.join(distDir, 'index.html')
+      : path.join(webDir, 'index.html');
+    res.sendFile(indexPath, error => {
       if (error) next(error);
     });
   });

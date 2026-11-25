@@ -33,4 +33,4 @@ Results depend on OpenAlex's coverage and its open-access PDF links. A match may
 
 ## Development
 
-Install Node.js 24 and run `npm ci`, `npm test`, and `npm start`. The default local data directory is `./data`; set `DATA_DIR`, `HOST`, or `PORT` to change it. Docker sets `HOST=0.0.0.0` inside the container while Compose controls the host bind address.
+Install Node.js 24 and run `npm ci`. Use `npm run build` to build the React web UI into `dist/` before `npm start`, or run the backend (`npm start`) alongside `npm run dev` (Vite dev server with `/api` and `/vendor` proxying). Run `npm test` for backend and unit tests, `npm run test:coverage` for unit coverage, and `npm run test:e2e` for Playwright end-to-end tests. The default local data directory is `./data`; set `DATA_DIR`, `HOST`, or `PORT` to change it. Docker sets `HOST=0.0.0.0` inside the container while Compose controls the host bind address.

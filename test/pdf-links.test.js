@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { destinationPosition, isSafeExternalUrl, isSupportedLink, resolveDestination } from '../public/pdf-links.js';
+import { destinationPosition, isSafeExternalUrl, isSupportedLink, resolveDestination } from '../web/src/lib/pdf-links.js';
 
 test('only supported external link schemes and PDF link annotations are enabled', () => {
   for (const url of ['https://example.org/a', 'http://example.org', 'mailto:author@example.org']) {
