@@ -162,7 +162,7 @@ test('library Unread/Read categorization, overlay drawer invariants, reading pro
   await expect(page.locator('#current-title')).toHaveText('Second Systems Paper');
 });
 
-test('citation dialog search, DOI auto-download, manual download, and text-selection citation trigger', async ({ page }) => {
+test('citation dialog search, explicit DOI download, manual download, and text-selection citation trigger', async ({ page }) => {
   await server.uploadPdf('Seed Paper', [
     'Seed Paper Page 1: See Transformers for Everyone for details',
     'Seed Paper Page 2: End'
@@ -208,10 +208,21 @@ test('citation dialog search, DOI auto-download, manual download, and text-selec
   const prefilled = await page.locator('#citation-text').inputValue();
   expect(prefilled.length).toBeGreaterThan(0);
 
-  // 3. Exact DOI match auto-downloads
+  // 3. Exact DOI match displays result without auto-downloading; user clicks Download PDF explicitly
+  let downloadRequests = 0;
+  page.on('request', req => {
+    if (req.url().includes('/api/citations/download')) downloadRequests += 1;
+  });
+
   await page.locator('#citation-text').fill('10.1234/exact');
   await page.locator('#search-citation').click();
+  await expect(page.locator('#search-status')).toContainText('Exact match found.');
+  await expect(page.locator('.result').first().getByRole('button', { name: 'Download PDF' })).toBeVisible();
+  expect(downloadRequests).toBe(0);
+
+  await page.locator('.result').first().getByRole('button', { name: 'Download PDF' }).click();
   await expect(page.locator('#search-status')).toContainText('PDF added to your library.');
+  expect(downloadRequests).toBe(1);
   await page.locator('.result').first().getByRole('button', { name: 'Open paper' }).click();
   await expect(page.locator('#current-title')).toHaveText('Exact DOI Match Paper');
 });

@@ -252,10 +252,10 @@ describe('CitationDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('auto-downloads confident DOI match (existing), handles confident without PDF, empty results, and errors', async () => {
+  it('does not auto-download confident DOI match, downloads explicitly on click (existing), and handles confident without PDF, empty results, and errors', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn()
-      // 1. Confident match with PDF -> auto-downloads -> existing paper
+      // 1. Confident match with PDF -> displays result without auto-downloading, then downloads on explicit click
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -306,10 +306,16 @@ describe('CitationDialog', () => {
       />
     );
 
-    // 1. Confident with PDF
+    // 1. Confident with PDF does NOT auto-download; user clicks Download PDF explicitly
     await user.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Exact match found.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/citations/download')).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: 'Download PDF' }));
     expect(await screen.findByText('This paper is already in your library.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open existing paper' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/citations/download', expect.objectContaining({ method: 'POST' }));
 
     // 2. Confident without PDF
     await user.click(screen.getByRole('button', { name: 'Search' }));

@@ -105,20 +105,17 @@ export function CitationDialog({
         return;
       }
       setStatus(result.confident
-        ? 'Exact match found.'
+        ? (result.confident.hasPdf
+          ? 'Exact match found.'
+          : 'Exact match found, but no open-access PDF is listed.')
         : 'Choose the correct paper from these possible matches.');
       setCandidates(result.candidates);
-      if (result.confident?.hasPdf) {
-        await handleDownload(result.confident, session);
-      } else if (result.confident) {
-        setStatus('Exact match found, but no open-access PDF is listed.');
-      }
     } catch (error) {
       if (session === sessionRef.current) setStatus(error.message);
     } finally {
       if (session === sessionRef.current) setSearching(false);
     }
-  }, [handleDownload]);
+  }, []);
 
   runSearchRef.current = runSearch;
 
