@@ -13,6 +13,8 @@ import {
   sanitizeTitleForSearch
 } from '../src/lib/link-highlight.js';
 import { dehyphenateLineWraps, shouldPreserveHyphen } from '../src/lib/dehyphenate.js';
+import * as nodeDict from '../src/lib/dehyphenate-dict.js';
+import * as browserDict from '../src/lib/dehyphenate-dict.browser.js';
 
 function createSpan(text, { left = 0, top = 0, width, height = 12, useRect = true, styleLeft, styleTop, fontSize } = {}) {
   const span = document.createElement('span');
@@ -630,5 +632,10 @@ describe('sanitizeTitleForSearch & word-aware dehyphenation', () => {
     // Capitalized proper-noun compound right half vs ALL-CAPS split
     expect(shouldPreserveHyphen('Multi', 'FooBar')).toBe(true);
     expect(shouldPreserveHyphen('MULTI', 'FOOBAR')).toBe(false);
+    // Node and browser dictionary loaders produce identical word sets from .txt files
+    expect(browserDict.CLOSED_WORDS).toEqual(nodeDict.CLOSED_WORDS);
+    expect(browserDict.BOUND_SUFFIXES).toEqual(nodeDict.BOUND_SUFFIXES);
+    expect(browserDict.COMPOUND_LEFT).toEqual(nodeDict.COMPOUND_LEFT);
+    expect(browserDict.COMPOUND_RIGHT).toEqual(nodeDict.COMPOUND_RIGHT);
   });
 });
