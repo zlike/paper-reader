@@ -4,6 +4,7 @@ import {
   applyHighlightRange,
   clearTargetHighlights,
   collectReferenceEntry,
+  detectColumns,
   extractTextItems,
   extractTitleRange,
   findTargetLineIndex,
@@ -88,25 +89,105 @@ describe('extractTextItems & groupItemsIntoLines', () => {
     expect(lines[0].text).toBe('[1] Left Author.');
     expect(lines[1].text).toBe('[10] Right Column.');
   });
+
+  it('detects narrow ICML-style two-column gutters despite running headers and centered page numbers', () => {
+    const layer = createTextLayer([
+      // Full-width running header spanning both columns
+      createSpan('Improving Factuality and Reasoning in Language Models through Multiagent Debate', { left: 168, top: 55, width: 382, height: 10 }),
+      // Left column (~67..350)
+      createSpan('Chen, Y., Arkin, J., Zhang, Y., Roy, N., and Fan, C. Scalable', { left: 67, top: 256, width: 281, height: 11 }),
+      createSpan('multi-robot collaboration with large language models:', { left: 79, top: 270, width: 271, height: 11 }),
+      createSpan('Centralized or decentralized systems? arXiv preprint', { left: 79, top: 285, width: 269, height: 11 }),
+      createSpan('arXiv:2309.15943, 2023. 8', { left: 79, top: 299, width: 140, height: 11 }),
+      // Right column (~370..653) — 19px (~2.6%) gutter!
+      createSpan('Kojima, T., Gu, S. S., Reid, M., Matsuo, Y., and Iwasawa,', { left: 370, top: 285, width: 283, height: 11 }),
+      createSpan('Y. Large language models are zero-shot reasoners. arXiv', { left: 381, top: 299, width: 271, height: 11 }),
+      createSpan('preprint arXiv:2205.11916, 2022. 1, 5, 7', { left: 381, top: 314, width: 210, height: 11 }),
+      // Centered page number sitting inside the gutter
+      createSpan('10', { left: 353, top: 880, width: 12, height: 10 })
+    ], { width: 736, height: 952 });
+
+    const items = extractTextItems(layer);
+    const cols = detectColumns(items, 736);
+    expect(cols).not.toBeNull();
+    expect(cols.splitX).toBeGreaterThan(350);
+    expect(cols.splitX).toBeLessThan(370);
+
+    const lines = groupItemsIntoLines(items, 736);
+    const kojimaLine = lines.find(l => l.text.startsWith('Kojima, T.'));
+    expect(kojimaLine.text).toBe('Kojima, T., Gu, S. S., Reid, M., Matsuo, Y., and Iwasawa,');
+    expect(kojimaLine.columnIndex).toBe(1);
+    const chenLine = lines.find(l => l.text.startsWith('Centralized or decentralized'));
+    expect(chenLine.text).toBe('Centralized or decentralized systems? arXiv preprint');
+    expect(chenLine.columnIndex).toBe(0);
+  });
+
+  it('does not falsely split single-column pages or non-overlapping vertical regions, and tolerates 1 overflowing item', () => {
+    expect(detectColumns([], 600)).toBeNull();
+    expect(detectColumns(extractTextItems(createTextLayer([
+      createSpan('Only one line', { left: 60, top: 100, width: 200 })
+    ], { width: 600 })), 600)).toBeNull();
+
+    // Single-column page where lines span across the middle
+    const singleColLayer = createTextLayer([
+      createSpan('Line one spans across the full width of the single column page.', { left: 72, top: 100, width: 460 }),
+      createSpan('Line two also spans across the full width of the single column page.', { left: 72, top: 116, width: 460 }),
+      createSpan('Line three continues cleanly without any column gutter.', { left: 72, top: 132, width: 420 })
+    ], { width: 600 });
+    expect(detectColumns(extractTextItems(singleColLayer), 600)).toBeNull();
+
+    // Non-overlapping Y ranges (left block at top, right block at bottom)
+    const nonOverlapLayer = createTextLayer([
+      createSpan('Top left text', { left: 40, top: 40, width: 150 }),
+      createSpan('Top left line 2', { left: 40, top: 56, width: 150 }),
+      createSpan('Bottom right signature', { left: 380, top: 400, width: 150 }),
+      createSpan('Bottom right date', { left: 380, top: 416, width: 150 })
+    ], { width: 600 });
+    expect(detectColumns(extractTextItems(nonOverlapLayer), 600)).toBeNull();
+
+    // Two-column page with >=10 items where 1 long URL slightly intrudes across the gutter
+    const overflowSpans = [];
+    for (let i = 0; i < 6; i++) {
+      overflowSpans.push(createSpan(`Left line ${i}`, { left: 50, top: 100 + i * 16, width: 230, height: 11 }));
+      overflowSpans.push(createSpan(`Right line ${i}`, { left: 310, top: 100 + i * 16, width: 230, height: 11 }));
+    }
+    overflowSpans.push(createSpan('https://very-long-url.example.org/overflow', { left: 200, top: 196, width: 140, height: 11 }));
+    const overflowCols = detectColumns(extractTextItems(createTextLayer(overflowSpans, { width: 600 })), 600);
+    expect(overflowCols).not.toBeNull();
+  });
 });
 
 describe('findTargetLineIndex', () => {
-  it('picks the closest line vertically and disambiguates two columns by X', () => {
+  it('picks the closest line vertically and disambiguates two columns by X including hyperref left-margin offset', () => {
     const layer = createTextLayer([
-      createSpan('[1] First reference', { left: 40, top: 100, width: 200 }),
-      createSpan('[2] Second reference', { left: 40, top: 140, width: 200 }),
-      createSpan('[10] Right column ref', { left: 320, top: 140, width: 200 })
+      createSpan('[1] First reference', { left: 67, top: 100, width: 280, height: 11 }),
+      createSpan('[2] Second reference', { left: 67, top: 140, width: 280, height: 11 }),
+      createSpan('[10] Right column ref', { left: 370, top: 140, width: 280, height: 11 })
+    ], { width: 736 });
+
+    const lines = groupItemsIntoLines(extractTextItems(layer), 736);
+    // Point slightly above [2] in left column (hyperref offset 43px -> left col 67px)
+    expect(findTargetLineIndex(lines, { x: 43, y: 136 })).toBe(1);
+    // Point with hyperref left-offset (x=346 is inside left col's right edge 347, but 24px left of right col 370!)
+    expect(findTargetLineIndex(lines, { x: 346, y: 140 })).toBe(2);
+    // Point squarely inside left column
+    expect(findTargetLineIndex(lines, { x: 180, y: 140 })).toBe(1);
+    // Point past right column's right edge still picks right column
+    expect(findTargetLineIndex(lines, { x: 700, y: 140 })).toBe(2);
+    // Point below all lines still picks closest
+    expect(findTargetLineIndex(lines, { x: 67, y: 200 })).toBe(1);
+    // Non-finite point defaults to (0, 0)
+    expect(findTargetLineIndex(lines, {})).toBe(0);
+  });
+
+  it('prefers the first reference below a References section heading when destination Y is below the heading', () => {
+    const layer = createTextLayer([
+      createSpan('References', { left: 67, top: 82, width: 70, height: 12 }),
+      createSpan('Alayrac, J.-B. et al. Flamingo. NeurIPS, 2022.', { left: 67, top: 106, width: 280, height: 11 })
     ], { width: 600 });
 
     const lines = groupItemsIntoLines(extractTextItems(layer), 600);
-    // Point slightly above [2] in left column
-    expect(findTargetLineIndex(lines, { x: 40, y: 136 })).toBe(1);
-    // Point at [10] in right column
-    expect(findTargetLineIndex(lines, { x: 320, y: 142 })).toBe(2);
-    // Point below all lines still picks closest
-    expect(findTargetLineIndex(lines, { x: 40, y: 200 })).toBe(1);
-    // Non-finite point defaults to (0, 0)
-    expect(findTargetLineIndex(lines, {})).toBe(0);
+    expect(findTargetLineIndex(lines, { x: 43, y: 100 })).toBe(1);
   });
 });
 
@@ -186,12 +267,74 @@ describe('collectReferenceEntry', () => {
     expect(entry.lines).toHaveLength(1);
     expect(entry.text).not.toContain('Appendix');
   });
+
+  it('continues a wrapped reference from left column bottom to right column top, but stops for a new right-column reference', () => {
+    // Wrapped reference across columns (with overlapping column content above)
+    const wrapLayer = createTextLayer([
+      createSpan('Earlier, E. Prior Paper. 2023.', { left: 60, top: 80, width: 200, height: 12 }),
+      createSpan('Author, A. First Half of a', { left: 60, top: 740, width: 200, height: 12 }),
+      createSpan('Very Long Wrapped', { left: 72, top: 754, width: 180, height: 12 }),
+      createSpan('Title Here. ICML, 2024.', { left: 382, top: 80, width: 180, height: 12 }),
+      createSpan('Next, B. Another Paper. 2024.', { left: 370, top: 108, width: 200, height: 12 })
+    ], { width: 736 });
+    const wrapLines = groupItemsIntoLines(extractTextItems(wrapLayer, 0), 736);
+    const wrapStart = wrapLines.findIndex(l => l.text.startsWith('Author, A.'));
+    const wrapEntry = collectReferenceEntry(wrapLines, wrapStart);
+    expect(wrapEntry.text).toBe('Author, A. First Half of a Very Long Wrapped Title Here. ICML, 2024.');
+
+    // Complete left-column reference followed by a new hanging-indent reference at top of right column
+    const separateLayer = createTextLayer([
+      createSpan('Earlier, E. Prior Paper. 2023.', { left: 60, top: 80, width: 200, height: 12 }),
+      createSpan('Hong, S., et al. Metagpt. arXiv, 2023.', { left: 60, top: 740, width: 240, height: 12 }),
+      createSpan('Irving, G., and Amodei, D. AI safety via', { left: 370, top: 80, width: 240, height: 12 }),
+      createSpan('debate. arXiv, 2018.', { left: 382, top: 94, width: 160, height: 12 })
+    ], { width: 736 });
+    const sepLines = groupItemsIntoLines(extractTextItems(separateLayer, 0), 736);
+    const sepStart = sepLines.findIndex(l => l.text.startsWith('Hong, S.'));
+    const sepEntry = collectReferenceEntry(sepLines, sepStart);
+    expect(sepEntry.text).toBe('Hong, S., et al. Metagpt. arXiv, 2023.');
+    expect(sepEntry.text).not.toContain('Irving');
+  });
+
+  it('continues across a page footer number onto the next page first column, and does not treat a wrapped year as a new reference', () => {
+    const targetLayer = createTextLayer([
+      createSpan('Shunyu Yao, Dian Yu, and Karthik Narasimhan.', { left: 72, top: 740, width: 320, height: 12 }),
+      createSpan('2023. Tree of Thoughts: Deliberate Problem', { left: 84, top: 754, width: 300, height: 12 }),
+      createSpan('10', { left: 290, top: 780, width: 16, height: 10 })
+    ], { width: 600 });
+    const nextLayer = createTextLayer([
+      createSpan('Solving with Large Language Models. NeurIPS.', { left: 84, top: 60, width: 300, height: 12 })
+    ], { width: 600 });
+
+    const targetLines = groupItemsIntoLines(extractTextItems(targetLayer, 0), 600);
+    const nextLines = groupItemsIntoLines(extractTextItems(nextLayer, 1), 600);
+    const entry = collectReferenceEntry(targetLines, 0, nextLines);
+    expect(entry.text).toBe(
+      'Shunyu Yao, Dian Yu, and Karthik Narasimhan. 2023. Tree of Thoughts: Deliberate Problem Solving with Large Language Models. NeurIPS.'
+    );
+
+    // Complete entry at bottom of page stops before a new "Last, F." entry on a multi-column next page
+    const completePage = createTextLayer([
+      createSpan('Liu, H., and Abbeel, P. Instruction agents. arXiv, 2022. 8', { left: 72, top: 740, width: 300, height: 12 })
+    ], { width: 600 });
+    const nextMultiCol = createTextLayer([
+      createSpan('Liu, N., and Du, Y. Compositional generation. arXiv, 2022.', { left: 60, top: 80, width: 220, height: 12 }),
+      createSpan('Shinn, N., and Gopinath, A. Reflexion. arXiv, 2023.', { left: 360, top: 80, width: 220, height: 12 })
+    ], { width: 736 });
+    const stopEntry = collectReferenceEntry(
+      groupItemsIntoLines(extractTextItems(completePage, 0), 600),
+      0,
+      groupItemsIntoLines(extractTextItems(nextMultiCol, 1), 736)
+    );
+    expect(stopEntry.lines).toHaveLength(1);
+    expect(stopEntry.text).not.toContain('Liu, N.');
+  });
 });
 
 describe('extractTitleRange', () => {
   const slice = (text, range) => (range ? text.slice(range.start, range.end) : null);
 
-  it('extracts quoted titles (straight, curly, and LaTeX quotes)', () => {
+  it('extracts quoted titles (straight, curly, and LaTeX quotes) without matching inline quotes inside titles', () => {
     const s1 = '[1] A. Vaswani et al., "Attention Is All You Need," in NeurIPS, 2017.';
     expect(slice(s1, extractTitleRange(s1))).toBe('Attention Is All You Need');
 
@@ -200,6 +343,45 @@ describe('extractTitleRange', () => {
 
     const s3 = "[3] K. He et al. ``Deep Residual Learning for Image Recognition,'' CVPR 2016.";
     expect(slice(s3, extractTitleRange(s3))).toBe('Deep Residual Learning for Image Recognition');
+
+    const s4 = 'Li, G., and Ghanem, B. Camel: Communicative agents for" mind" exploration of large language model society. NeurIPS, 2024.';
+    expect(slice(s4, extractTitleRange(s4))).toBe(
+      'Camel: Communicative agents for" mind" exploration of large language model society'
+    );
+  });
+
+  it('extracts titles from Last, F. author-dot bibliographies including multi-initials, hyphenated initials, and surname particles', () => {
+    const kojima = 'Kojima, T., Gu, S. S., Reid, M., Matsuo, Y., and Iwasawa, Y. Large language models are zero-shot reasoners. arXiv preprint arXiv:2205.11916, 2022. 1, 5, 7';
+    expect(slice(kojima, extractTitleRange(kojima))).toBe('Large language models are zero-shot reasoners');
+
+    const guu = 'Guu, K., Lee, K., and Chang, M.- W. REALM: Retrieval-augmented language model pre-training. arXiv preprint arXiv:2002.08909, 2020. 8';
+    expect(slice(guu, extractTitleRange(guu))).toBe('REALM: Retrieval-augmented language model pre-training');
+
+    const minsky = 'Minsky, M. Society of mind. Simon and Schuster, 1988. 1';
+    expect(slice(minsky, extractTitleRange(minsky))).toBe('Society of mind');
+
+    const lamda = '[28] R. Thoppilan, D. De Freitas, J. Hall, and G. Irv- ing. Lamda: Language models for dialog applications. arXiv, 2022.';
+    expect(slice(lamda, extractTitleRange(lamda))).toBe('Lamda: Language models for dialog applications');
+  });
+
+  it('handles titles with question/exclamation marks, web dates, and trailing venue/URL cues', () => {
+    const chen = 'Chen, Y., Arkin, J., and Fan, C. Scalable multi-robot collaboration: Centralized or decentralized systems? arXiv preprint arXiv:2309.15943, 2023. 8';
+    expect(slice(chen, extractTitleRange(chen))).toBe('Scalable multi-robot collaboration: Centralized or decentralized systems?');
+
+    const rajani = 'Rajani, N. F., and Socher, R. Explain yourself! leveraging language models for commonsense reasoning. arXiv preprint arXiv:1906.02361, 2019. 7';
+    expect(slice(rajani, extractTitleRange(rajani))).toBe('Explain yourself! leveraging language models for commonsense reasoning');
+
+    const wt5 = 'Sharan Narang, Colin Raffel, and Karishma Malkan. 2020. WT5?! Training text-to-text models to explain their predictions. arXiv preprint.';
+    expect(slice(wt5, extractTitleRange(wt5))).toBe('WT5?! Training text-to-text models to explain their predictions');
+
+    const openai = 'OpenAI. Chatgpt: Optimizing language models for dialogue, Dec 2022. URL https://openai.com/blog/chatgpt/. 1, 5';
+    expect(slice(openai, extractTitleRange(openai))).toBe('Chatgpt: Optimizing language models for dialogue');
+
+    const noPeriodArxiv = 'Smith, J. Zero-Shot Reasoning with Prompts arXiv:2205.11916';
+    expect(slice(noPeriodArxiv, extractTitleRange(noPeriodArxiv))).toBe('Zero-Shot Reasoning with Prompts');
+
+    const withBackref = 'Smith, J. Can Language Models Reason? 1, 5, 7';
+    expect(slice(withBackref, extractTitleRange(withBackref))).toBe('Can Language Models Reason?');
   });
 
   it('extracts titles from author-year parenthesized citations', () => {
@@ -326,6 +508,33 @@ describe('applyHighlightRange, clearTargetHighlights, and highlightLinkTarget', 
     expect(mark.textContent).toBe('Single Span Title Here');
     expect(mark.previousSibling.nodeValue).toBe('[1] A. Smith. ');
     expect(mark.nextSibling.nodeValue).toBe('. ICML, 2022.');
+  });
+
+  it('reproduces Du et al. Page 10 two-column Kojima citation and highlights only the exact title with zero cross-column bleed', () => {
+    const layer = createTextLayer([
+      createSpan('Improving Factuality and Reasoning in Language Models', { left: 168, top: 55, width: 382, height: 10 }),
+      createSpan('Chen, Y., Arkin, J., Zhang, Y., Roy, N., and Fan, C. Scalable', { left: 67, top: 256, width: 281, height: 11 }),
+      createSpan('multi-robot collaboration with large language models:', { left: 79, top: 270, width: 271, height: 11 }),
+      createSpan('Centralized or decentralized systems? ', { left: 79, top: 285, width: 198, height: 11 }),
+      createSpan('arXiv preprint', { left: 277, top: 285, width: 71, height: 11 }),
+      createSpan('arXiv:2309.15943, 2023. 8', { left: 79, top: 299, width: 140, height: 11 }),
+      createSpan('Kojima, T., Gu, S. S., Reid, M., Matsuo, Y., and Iwasawa,', { left: 370, top: 295, width: 283, height: 11 }),
+      createSpan('Y. Large language models are zero-shot reasoners. arXiv', { left: 381, top: 310, width: 271, height: 11 }),
+      createSpan('preprint arXiv:2205.11916, 2022. 1, 5, 7', { left: 381, top: 324, width: 210, height: 11 }),
+      createSpan('10', { left: 353, top: 880, width: 12, height: 10 })
+    ], { width: 736, height: 952 });
+
+    const result = highlightLinkTarget({
+      targetTextLayer: layer,
+      point: { x: 345.8, y: 291.2 }
+    });
+
+    expect(result.matchedTitle).toBe(true);
+    expect(result.text).toBe('Large language models are zero-shot reasoners');
+    expect(result.entryText).not.toContain('Centralized');
+    expect(result.entryText).not.toContain('2309.15943');
+    const marks = layer.querySelectorAll(`mark.${HIGHLIGHT_CLASS}`);
+    expect(Array.from(marks).map(m => m.textContent).join('')).toBe('Large language models are zero-shot reasoners');
   });
 
   it('handles null/empty layers and invalid ranges gracefully', () => {

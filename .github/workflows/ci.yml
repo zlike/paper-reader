@@ -69,3 +69,27 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  highlight-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache benchmark PDFs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/paper-reader-highlight-benchmark
+          key: highlight-benchmark-pdfs-${{ hashFiles('scripts/benchmark-highlight.mjs') }}
+
+      - name: Run real-paper link highlighting benchmark
+        run: BENCHMARK_CACHE_DIR="$HOME/.cache/paper-reader-highlight-benchmark" npm run benchmark:highlight
