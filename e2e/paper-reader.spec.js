@@ -983,4 +983,47 @@ test('LinkPreviewDialog preserves compound hyphen across line wraps for Self-Fee
   await expect(page.locator('#citation-text')).toHaveValue('Self-Refine: Iterative Refinement with Self-Feedback');
 });
 
+test('reading-pane "Find cited paper" sanitizes line-wrapped selection and auto-triggers citation search (issue #23)', async ({ page }) => {
+  await server.uploadPdf(
+    'Reading Pane Sanitization Paper',
+    [
+      [
+        { text: 'Self-', x: 72, y: 720, size: 14 },
+        { text: 'feedback for Trans-', x: 72, y: 700, size: 14 },
+        { text: 'formers for Everyone', x: 72, y: 680, size: 14 }
+      ]
+    ]
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Reading Pane Sanitization Paper' }).click();
+
+  const textLayer = page.locator('.page[data-page="1"] .textLayer');
+  await expect(textLayer).toContainText('formers for Everyone');
+
+  // Select across all three wrapped lines in the reading pane
+  await textLayer.evaluate(el => {
+    const spans = Array.from(el.querySelectorAll('span')).filter(s => s.textContent.trim().length > 0);
+    const range = document.createRange();
+    range.setStartBefore(spans[0]);
+    range.setEndAfter(spans[spans.length - 1]);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  const findBtn = page.locator('#find-selection');
+  await expect(findBtn).toBeVisible();
+  await findBtn.click();
+
+  // CitationDialog opens with sanitized query (compound hyphen preserved, split word rejoined) and auto-searches
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#dialog-title')).toHaveText('Find a cited paper');
+  await expect(page.locator('#citation-text')).toHaveValue('Self-feedback for Transformers for Everyone');
+  await expect(page.locator('#search-status')).toContainText('Choose the correct paper');
+  await expect(page.locator('.result')).toHaveCount(2);
+  await expect(page.locator('.result').first()).toContainText('Transformers for Everyone');
+});
+
 

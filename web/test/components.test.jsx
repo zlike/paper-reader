@@ -1591,4 +1591,59 @@ describe('LinkPreviewDialog', () => {
     fireEvent.click(findBtn);
     expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need', { autoSearch: true });
   });
+
+  it('sanitizes manual line-wrapped text selection before searching and ignores empty sanitized selection', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({ numPages: 3 });
+    const onFindCitation = vi.fn();
+
+    render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={22}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={onFindCitation}
+      />
+    );
+
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.page[data-page="3"] .textLayer span')).toBeTruthy();
+    });
+
+    const textNode = previewPages.querySelector('.page[data-page="3"] .textLayer span').firstChild;
+    const selectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => 'Self-\nfeedback in au-\ntonomous agents',
+      anchorNode: textNode,
+      isCollapsed: false,
+      removeAllRanges: vi.fn()
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const findBtn = document.getElementById('link-preview-find-selection');
+    expect(findBtn).not.toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).toHaveBeenCalledWith('Self-feedback in autonomous agents', { autoSearch: true });
+
+    onFindCitation.mockClear();
+    selectionSpy.mockReturnValue({
+      toString: () => '\u00AD\u2014   ',
+      anchorNode: textNode,
+      isCollapsed: false,
+      removeAllRanges: vi.fn()
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    expect(findBtn).toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).not.toHaveBeenCalled();
+  });
 });

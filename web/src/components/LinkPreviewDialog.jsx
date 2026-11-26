@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { sanitizeTitleForSearch } from '../lib/dehyphenate.js';
 import { computePreviewTarget, findLinkAtPoint, resolveDestination } from '../lib/pdf-links.js';
 import { clearTargetHighlights, highlightLinkTarget } from '../lib/link-highlight.js';
 import { useLinkHover } from '../hooks/useLinkHover.js';
@@ -203,7 +204,7 @@ export function LinkPreviewDialog({
     onJumpToTarget(resolved);
   }, [previewState, closeDialog, onJumpToTarget]);
 
-  const findQuery = showFindSelection ? selectedText : highlightedTitle;
+  const findQuery = showFindSelection ? sanitizeTitleForSearch(selectedText) : highlightedTitle;
   const showFindButton = Boolean(findQuery);
 
   const handleFindCitedPaper = useCallback(() => {
