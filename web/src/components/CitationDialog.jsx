@@ -79,7 +79,7 @@ export function CitationDialog({
   const runSearch = useCallback(async (queryText, session) => {
     setCandidates([]);
     setItemStates({});
-    setStatus('Searching OpenAlex…');
+    setStatus('Searching papers…');
     setSearching(true);
     try {
       const result = await searchCitations(queryText);
@@ -89,7 +89,7 @@ export function CitationDialog({
         return;
       }
       setStatus(result.confident
-        ? 'Exact DOI match found.'
+        ? 'Exact match found.'
         : 'Choose the correct paper from these possible matches.');
       setCandidates(result.candidates);
       if (result.confident?.hasPdf) {
