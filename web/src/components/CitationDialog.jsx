@@ -203,17 +203,46 @@ export function CitationDialog({
                 : provider.status === 'error'
                   ? 'is-error'
                   : 'is-empty';
+            const detailText = searching
+              ? 'Searching…'
+              : provider.status === 'ok'
+                ? `${provider.count} ${provider.count === 1 ? 'match' : 'matches'}`
+                : provider.status === 'error'
+                  ? (provider.error || 'Search failed')
+                  : (provider.reason || 'No matches');
+            const badgeText = searching
+              ? null
+              : provider.status === 'ok'
+                ? String(provider.count)
+                : provider.status === 'error'
+                  ? 'Error'
+                  : '0';
             return (
-              <span key={provider.id} className={`provider-pill ${stateClass}`}>
+              <span
+                key={provider.id}
+                className={`provider-pill ${stateClass}`}
+                title={`${provider.name}: ${detailText}`}
+              >
                 <span className="provider-dot" aria-hidden="true" />
                 <span>{provider.name}</span>
-                {!searching && provider.status === 'ok' && (
-                  <span className="provider-count">{provider.count}</span>
+                {badgeText !== null && (
+                  <span className="provider-count">{badgeText}</span>
                 )}
               </span>
             );
           })}
         </div>
+      )}
+      {!searching && providers.some(provider => provider.status === 'error') && (
+        <ul className="provider-errors" aria-label="Provider errors">
+          {providers
+            .filter(provider => provider.status === 'error')
+            .map(provider => (
+              <li key={provider.id}>
+                <strong>{provider.name}:</strong> {provider.error || 'Search failed'}
+              </li>
+            ))}
+        </ul>
       )}
       <div id="results">
         {candidates.map(candidate => {

@@ -286,7 +286,12 @@ test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async
   assert.deepEqual(result.candidates[0].pdfUrls, ['https://arxiv.org/pdf/2103.00020.pdf']);
   assert.ok(Array.isArray(result.providers));
   assert.equal(result.providers.find(p => p.id === 'ARXIV')?.status, 'ok');
-  assert.equal(result.providers.find(p => p.id === 'OPENALEX')?.status, 'error');
+  const oaProvider = result.providers.find(p => p.id === 'OPENALEX');
+  assert.equal(oaProvider?.status, 'error');
+  assert.equal(oaProvider?.error, 'Rate limited (HTTP 429)');
+  const crProvider = result.providers.find(p => p.id === 'CROSSREF');
+  assert.equal(crProvider?.status, 'empty');
+  assert.equal(crProvider?.reason, 'No matches');
 });
 
 test('multi-line Kadavath et al. citation resolves with arXiv ID, wrapped arXiv ID, and without arXiv ID', async () => {

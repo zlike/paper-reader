@@ -662,15 +662,42 @@ const PROVIDER_NAMES = {
   SEMANTIC_SCHOLAR: 'Semantic Scholar'
 };
 
+function formatProviderError(reason) {
+  const name = reason?.name || '';
+  const msg = String(reason?.message || '');
+  if (name === 'AbortError' || name === 'TimeoutError' || /timed?\s*out|aborted/i.test(msg)) {
+    return 'Request timed out';
+  }
+  const httpMatch = msg.match(/HTTP\s+(\d{3})/i);
+  if (httpMatch) {
+    const code = Number(httpMatch[1]);
+    if (code === 429) return 'Rate limited (HTTP 429)';
+    return `Unavailable (HTTP ${code})`;
+  }
+  if (/fetch failed|network|econnrefused|enotfound|econnreset|etimedout/i.test(msg)) {
+    return 'Network error';
+  }
+  return 'Search failed';
+}
+
 function createProviderTracker(ids) {
   const map = new Map();
+  const makeEntry = id => ({
+    id,
+    name: PROVIDER_NAMES[id] || id,
+    status: 'empty',
+    count: 0,
+    _hadSuccess: false,
+    _hadError: false,
+    _error: null
+  });
   for (const id of ids) {
-    map.set(id, { id, name: PROVIDER_NAMES[id] || id, status: 'empty', count: 0, _hadSuccess: false, _hadError: false });
+    map.set(id, makeEntry(id));
   }
   return {
     record(id, settledResult) {
       if (!map.has(id)) {
-        map.set(id, { id, name: PROVIDER_NAMES[id] || id, status: 'empty', count: 0, _hadSuccess: false, _hadError: false });
+        map.set(id, makeEntry(id));
       }
       const entry = map.get(id);
       if (settledResult.status === 'fulfilled') {
@@ -681,13 +708,20 @@ function createProviderTracker(ids) {
         entry.count += items.length;
       } else {
         entry._hadError = true;
+        if (!entry._error) entry._error = settledResult.reason;
       }
     },
     toList() {
-      return [...map.values()].map(({ _hadSuccess, _hadError, ...entry }) => ({
-        ...entry,
-        status: entry.count > 0 ? 'ok' : _hadSuccess ? 'empty' : _hadError ? 'error' : 'empty'
-      }));
+      return [...map.values()].map(({ _hadSuccess, _hadError, _error, ...entry }) => {
+        const status = entry.count > 0 ? 'ok' : _hadSuccess ? 'empty' : _hadError ? 'error' : 'empty';
+        if (status === 'error') {
+          return { ...entry, status, error: formatProviderError(_error) };
+        }
+        if (status === 'empty') {
+          return { ...entry, status, reason: 'No matches' };
+        }
+        return { ...entry, status };
+      });
     }
   };
 }

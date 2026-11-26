@@ -579,9 +579,9 @@ describe('CitationDialog', () => {
             { source: 'ARXIV', id: '2207.05221', title: 'Language Models (Mostly) Know What They Know', authors: 'Saurav Kadavath', year: 2022, hasPdf: true }
           ],
           providers: [
-            { id: 'OPENALEX', name: 'OpenAlex', status: 'error', count: 0 },
+            { id: 'OPENALEX', name: 'OpenAlex', status: 'error', count: 0, error: 'Rate limited (HTTP 429)' },
             { id: 'ARXIV', name: 'arXiv', status: 'ok', count: 1 },
-            { id: 'CROSSREF', name: 'Crossref', status: 'empty', count: 0 }
+            { id: 'CROSSREF', name: 'Crossref', status: 'empty', count: 0, reason: 'No matches' }
           ]
         })
       });
@@ -592,6 +592,10 @@ describe('CitationDialog', () => {
     expect(bar.querySelectorAll('.provider-pill.is-error')).toHaveLength(1);
     expect(bar.querySelectorAll('.provider-pill.is-empty')).toHaveLength(1);
     expect(bar).toHaveTextContent('arXiv1');
+    expect(bar).toHaveTextContent('OpenAlexError');
+    expect(bar).toHaveTextContent('Crossref0');
+    const errorList = screen.getByLabelText('Provider errors');
+    expect(errorList).toHaveTextContent('OpenAlex: Rate limited (HTTP 429)');
   });
 });
 
