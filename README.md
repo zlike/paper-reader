@@ -1,39 +1,43 @@
 # Paper Reader
 
-A phone-friendly PDF library and citation finder. PDFs and a SQLite index are stored in a Docker volume on the device running the container. Citation searches query [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), and [Crossref](https://www.crossref.org/); only PDF locations identified as open access are downloaded. The service needs internet access for citation searches and downloads.
+A self-hosted, touch-first Progressive Web App (PWA) for reading research papers, tracking reading progress, previewing internal citation links in place, and discovering and downloading cited open-access papers in one tap.
 
-## Run on your phone
+## Features
 
-The phone must already run Docker and Docker Compose. The image is built from the official Node image for the phone's architecture (including ARM64); no particular architecture is assumed. Copy this folder to the phone, then run in that folder:
+### Touch-First PWA PDF Reader
+- **Installable web app**: Add Paper Reader to your home screen on iPad, iPhone, or Android for a standalone, full-screen reading experience.
+- **PDF-only pinch-to-zoom & pan**: Smooth touch pinch-zoom and panning (plus toolbar zoom controls) that scale the PDF content without zooming the app chrome.
+- **Non-resizing overlay library drawer**: Slide open or swipe closed the library drawer without reflowing or shifting the current page.
+- **Safe link handling**: Internal PDF links open in an in-place preview modal, HTTP/HTTPS links open in a new tab, `mailto:` links open your mail app, and unsupported link schemes are blocked.
+
+### Automatic Reading Progress & Resume
+- **Hybrid SQLite + `localStorage` sync**: Continuously saves your reading position so progress persists across page reloads and devices on your network.
+- **Auto-resume where you left off**: Automatically reopens your last-read paper at your exact scroll position.
+- **Unread / Read library organization**: Automatically separates papers into **Unread** and **Read** sections with human-readable timestamps.
+
+### In-Place Citation Link Preview
+- **Preview references without losing your place**: Tap an internal PDF citation link to view the target bibliography entry in a modal—including entries that wrap across page breaks—while keeping your main reading position intact.
+- **Column-aware target highlighting**: Automatically detects and highlights the cited reference title inside single- or multi-column layouts, with a **Jump to page** option when you want to navigate there directly.
+
+### One-Tap Cited Paper Discovery & Federated Search
+- **Find cited papers from anywhere**: Search by title, DOI, arXiv ID, or bibliography entry via **+ Add PDF**, by selecting text in a PDF, or directly from a highlighted citation preview (**Find selected paper**).
+- **Multi-engine federated search**: Queries [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), and [Crossref](https://www.crossref.org/) simultaneously with live per-provider status indicators and match counts.
+- **Word-aware PDF line-wrap dehyphenation**: Automatically repairs hyphenated words split across PDF line or column breaks while preserving true compound hyphens for more accurate search queries.
+- **Open-access downloads & duplicate prevention**: Downloads verified open-access PDFs (auto-downloading confident matches when available) and detects papers already in your library so you can open them immediately instead of downloading duplicates.
+
+### Simple Local-Network Self-Hosting
+- **Zero-auth personal deployment**: Runs as a single self-hosted container with persistent PDF storage and a SQLite index—no accounts or login setup required on a trusted home or local network.
+
+## Quick Start
+
+Run with Docker Compose and open `http://127.0.0.1:3000`:
 
 ```sh
 docker compose up -d --build
 ```
 
-By default the port is bound only to the phone's loopback interface. On the phone, open `http://127.0.0.1:3000`. To allow other devices on your trusted LAN, create a `.env` file next to `compose.yaml`:
+> **Note:** Paper Reader requires internet access for citation searches and open-access PDF downloads, does not include OCR for scanned PDFs without a text layer, and has no built-in authentication—use it only on a trusted local network.
 
-```dotenv
-BIND_ADDRESS=0.0.0.0
-HOST_PORT=3000
-MAX_PDF_MB=50
-MAX_STORAGE_MB=1024
-# Optional: free OpenAlex API key for higher daily search quotas
-# (get one at https://help.openalex.org/api/authentication/)
-# OPENALEX_API_KEY=
-```
+## Deployment & Development
 
-Run `docker compose up -d` again, then visit `http://PHONE_LAN_IP:3000` from another device. Choose a different `HOST_PORT` if needed. Do not expose this service to the public internet: **there is no login, encryption, or user isolation**. Anyone who can reach it can read and add papers and trigger downloads. Use only a trusted network; firewall the port where appropriate.
-
-The `papers` named volume persists across container recreation and image rebuilds. `docker compose down` keeps the volume; `docker compose down -v` **deletes the library**. Back up the entire volume, including `library.sqlite`, any SQLite WAL files, and `papers/`; stop the container before copying it for a consistent backup. Disk usage includes SQLite, temporary downloads and filesystem overhead in addition to the configured library limit. Ensure the phone has free disk space. `MAX_PDF_MB` and `MAX_STORAGE_MB` are positive whole numbers; storage quota counts saved PDF bytes, not temporary files or database overhead. Keep one app container per volume.
-
-## Use
-
-Tap **Add PDF** to search for a paper by title or DOI, then choose the correct result to download its open-access PDF. Select a saved title in the library to read it. The library closes when you open a paper; use the menu button to show or hide it, and the plus and minus buttons to zoom. Select text in the PDF, tap **Find cited paper**, and check or edit the selected text. An exact DOI match with an open-access PDF is downloaded automatically; otherwise choose a candidate. Once downloaded, use **Open paper** to read it immediately. Searches send the entered text to OpenAlex. A numbered citation such as `[12]` does not identify a paper by itself: select its full bibliography entry or title instead. Scanned PDFs without a text layer cannot be selected; OCR is not included.
-
-PDF links can jump to another location in the paper. HTTP and HTTPS links open in a new tab, and email links open your email application. Other external link schemes are not opened.
-
-Results depend on OpenAlex's coverage and its open-access PDF links. A match may be ambiguous, unavailable, blocked by the source, or not actually a PDF; the app reports these cases rather than downloading a paywalled copy. PDFs are checked for a PDF signature, not scanned for malware. For untrusted documents, keep your browser and device up to date.
-
-## Development
-
-Install Node.js 24 and run `npm ci`. Use `npm run build` to build the React web UI into `dist/` before `npm start`, or run the backend (`npm start`) alongside `npm run dev` (Vite dev server with `/api` and `/vendor` proxying). Run `npm test` for backend and unit tests, `npm run test:coverage` for unit coverage, and `npm run test:e2e` for Playwright end-to-end tests. The default local data directory is `./data`; set `DATA_DIR`, `HOST`, or `PORT` to change it. Docker sets `HOST=0.0.0.0` inside the container while Compose controls the host bind address.
+For LAN setup, `.env` configuration (`OPENALEX_API_KEY`, storage limits), backups, security notes, local Node.js 24 development, tests, and accuracy benchmarks, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
