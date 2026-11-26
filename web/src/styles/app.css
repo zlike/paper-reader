@@ -7,14 +7,14 @@
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; touch-action: manipulation; }
 #root { display: flex; flex-direction: column; height: 100dvh; }
-button, textarea { font: inherit; }
+button, textarea, input { font: inherit; }
 button, a {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .6; }
-button:focus-visible, textarea:focus-visible {
+button:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: 2px solid #315ed8;
   outline-offset: 2px;
 }
@@ -426,14 +426,51 @@ dialog::backdrop { background: #10182799; }
 }
 .dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dialog-header h2 { margin: 0; }
-textarea {
+.dialog-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  margin: 12px 0 4px;
+  border-radius: 10px;
+  background: #edf1f7;
+}
+.dialog-tab {
+  flex: 1;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4b586c;
+  font-size: .9rem;
+  font-weight: 600;
+  transition: background-color .12s ease, color .12s ease;
+}
+.dialog-tab.is-active {
+  background: white;
+  color: #1d46b8;
+  box-shadow: 0 1px 3px #0001;
+}
+.url-form {
+  display: grid;
+  gap: 10px;
+}
+.field-label {
+  display: grid;
+  gap: 4px;
+  font-size: .85rem;
+  font-weight: 600;
+  color: #344054;
+}
+textarea, input {
   width: 100%;
-  resize: vertical;
   border: 1px solid #aeb8c7;
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 1rem;
 }
+textarea { resize: vertical; }
+input { min-height: 44px; }
 #search-citation { margin-top: 10px; }
 #search-status, #library-status {
   color: #8a3c15;

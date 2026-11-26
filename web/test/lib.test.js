@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  addPaperFromUrl,
   apiFetch,
   downloadCitation,
   fetchPapers,
@@ -66,6 +67,20 @@ describe('api helpers', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: 'OPENALEX', id: 'W42' })
+    });
+
+    await addPaperFromUrl('https://example.org/paper.pdf');
+    expect(fetchMock).toHaveBeenCalledWith('/api/papers/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.org/paper.pdf' })
+    });
+
+    await addPaperFromUrl('https://example.org/paper.pdf', '  Custom Title  ');
+    expect(fetchMock).toHaveBeenCalledWith('/api/papers/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.org/paper.pdf', title: 'Custom Title' })
     });
   });
 

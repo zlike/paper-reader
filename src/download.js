@@ -18,15 +18,52 @@ export function isPublicAddress(address) {
   }
 }
 
+const REJECTED_CONTENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
+  'application/json',
+  'application/xml',
+  'text/xml',
+  'text/plain',
+  'text/css',
+  'application/x-msdownload',
+  'application/x-dosexec',
+  'application/x-executable',
+  'application/x-sh',
+  'application/x-mach-binary',
+  'application/x-elf',
+  'application/vnd.microsoft.portable-executable'
+]);
+
+export function isRejectedContentType(headerValue) {
+  if (typeof headerValue !== 'string' || !headerValue.trim()) return false;
+  const mediaType = headerValue.split(';')[0].trim().toLowerCase();
+  if (!mediaType) return false;
+  if (mediaType === 'application/pdf' || mediaType === 'application/x-pdf' || mediaType === 'application/octet-stream' || mediaType === 'binary/octet-stream') {
+    return false;
+  }
+  if (REJECTED_CONTENT_TYPES.has(mediaType)) return true;
+  return mediaType.startsWith('text/') || mediaType.startsWith('image/') || mediaType.startsWith('audio/') || mediaType.startsWith('video/');
+}
+
+function createHttpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 async function request(url, redirects, signal) {
-  if (redirects > 4) throw new Error('Too many PDF redirects');
+  if (redirects > 4) throw createHttpError('Too many PDF redirects', 400);
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) {
-    throw new Error('PDF download URL must be a public HTTPS address');
+    throw createHttpError('PDF download URL must be a public HTTPS address', 400);
   }
   const addresses = await dns.lookup(parsed.hostname, { all: true });
   if (!addresses.length || addresses.some(entry => !isPublicAddress(entry.address))) {
-    throw new Error('PDF download address is not public');
+    throw createHttpError('PDF download address is not public', 400);
   }
   const chosen = addresses[0];
   const response = await new Promise((resolve, reject) => {
@@ -41,7 +78,7 @@ async function request(url, redirects, signal) {
   if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
     const location = response.headers.location;
     response.resume();
-    if (!location) throw new Error('PDF redirect is missing a destination');
+    if (!location) throw createHttpError('PDF redirect is missing a destination', 400);
     return request(new URL(location, parsed).href, redirects + 1, signal);
   }
   if (response.statusCode !== 200) {
@@ -53,10 +90,16 @@ async function request(url, redirects, signal) {
 
 export async function downloadPdf(url, destination, maxBytes) {
   const response = await request(url, 0, AbortSignal.timeout(60000));
+  const contentType = response.headers['content-type'];
+  if (isRejectedContentType(contentType)) {
+    response.destroy();
+    const mediaType = String(contentType).split(';')[0].trim().toLowerCase();
+    throw createHttpError(`URL did not return a PDF (Content-Type: ${mediaType})`, 422);
+  }
   const length = Number(response.headers['content-length']);
   if (Number.isFinite(length) && length > maxBytes) {
     response.destroy();
-    throw new Error('PDF exceeds the file size limit');
+    throw createHttpError('PDF exceeds the file size limit', 413);
   }
   let total = 0;
   const limit = new Transform({

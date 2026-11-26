@@ -6,17 +6,53 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { searchCitation, getCandidate } from './citations.js';
 import { downloadPdf } from './download.js';
+import { PdfScanError, scanPdf } from './pdf-scanner.js';
+import { normalizeArxivId } from './storage.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const distDir = path.join(root, 'dist');
 const publicDir = path.join(root, 'public');
 const webDir = path.join(root, 'web');
 
+export function extractArxivIdFromUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!/^(?:www\.)?arxiv\.org$/i.test(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/^\/pdf\/(.+?)(?:\.pdf)?$/i);
+    return match ? normalizeArxivId(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function deriveTitleFromUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1] || '';
+    let decoded = last;
+    try {
+      decoded = decodeURIComponent(last);
+    } catch {
+      decoded = last;
+    }
+    const cleaned = decoded
+      .replace(/\.pdf$/i, '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.slice(0, 500) || 'Untitled paper';
+  } catch {
+    return 'Untitled paper';
+  }
+}
+
 export function createApp(storage, services = {}) {
   const app = express();
   const search = services.searchCitation || searchCitation;
   const lookup = services.getCandidate || getCandidate;
   const download = services.downloadPdf || downloadPdf;
+  const scan = services.scanPdf || scanPdf;
   const upload = multer({
     storage: multer.diskStorage({
       destination: storage.tmpDir,
@@ -95,12 +131,54 @@ export function createApp(storage, services = {}) {
   app.post('/api/papers', upload.single('file'), wrap(async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Choose a PDF file' });
     try {
+      const scanResult = await scan(req.file.path);
       const title = typeof req.body.title === 'string' && req.body.title.trim()
-        ? req.body.title : req.file.originalname.replace(/\.pdf$/i, '');
+        ? req.body.title
+        : (scanResult?.title || req.file.originalname.replace(/\.pdf$/i, ''));
       const result = await storage.save(req.file.path, { title });
       res.status(result.existing ? 200 : 201).json(result);
     } finally {
       await storage.removeTemp(req.file.path);
+    }
+  }));
+  app.post('/api/papers/from-url', wrap(async (req, res) => {
+    const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!rawUrl || rawUrl.length > 2048) {
+      return res.status(400).json({ error: 'Provide a valid HTTPS PDF URL up to 2,048 characters' });
+    }
+    if (req.body?.title !== undefined && req.body?.title !== null) {
+      if (typeof req.body.title !== 'string' || req.body.title.length > 500) {
+        return res.status(400).json({ error: 'Title must be a string up to 500 characters' });
+      }
+    }
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ error: 'PDF download URL must be a public HTTPS address' });
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) {
+      return res.status(400).json({ error: 'PDF download URL must be a public HTTPS address' });
+    }
+
+    const arxivId = extractArxivIdFromUrl(parsed.href);
+    if (arxivId) {
+      const existing = storage.findExisting({ arxivId });
+      if (existing) return res.status(200).json({ paper: existing, existing: true });
+    }
+
+    const temp = path.join(storage.tmpDir, randomUUID());
+    try {
+      await download(parsed.href, temp, storage.maxPdfBytes);
+      const scanResult = await scan(temp);
+      const userTitle = typeof req.body?.title === 'string' && req.body.title.trim()
+        ? req.body.title.trim()
+        : null;
+      const title = userTitle || scanResult?.title || deriveTitleFromUrl(parsed.href);
+      const result = await storage.save(temp, { title, arxivId });
+      res.status(result.existing ? 200 : 201).json(result);
+    } finally {
+      await storage.removeTemp(temp);
     }
   }));
   const candidateLookupKey = (candidate, fallbackSource = null, fallbackId = null) => {
@@ -149,6 +227,7 @@ export function createApp(storage, services = {}) {
       for (const url of candidate.pdfUrls) {
         try {
           await download(url, temp, storage.maxPdfBytes);
+          await scan(temp);
           downloaded = true;
           break;
         } catch (error) {
@@ -156,7 +235,12 @@ export function createApp(storage, services = {}) {
           await storage.removeTemp(temp);
         }
       }
-      if (!downloaded) throw new Error(`Could not download an open-access PDF: ${lastError.message}`);
+      if (!downloaded) {
+        if (lastError instanceof PdfScanError || lastError?.status === 422) {
+          throw lastError;
+        }
+        throw new Error(`Could not download an open-access PDF: ${lastError.message}`);
+      }
       const result = await storage.save(temp, { ...candidate, arxivId: lookupKey.arxivId });
       res.status(result.existing ? 200 : 201).json(result);
     } finally {
@@ -178,7 +262,10 @@ export function createApp(storage, services = {}) {
     console.error(error);
     if (res.headersSent) return;
     const message = error.code === 'LIMIT_FILE_SIZE' ? 'PDF exceeds the file size limit' : error.message;
-    res.status(error.type === 'entity.too.large' || error instanceof multer.MulterError ? 400 : 500)
+    const status = Number.isInteger(error.status)
+      ? error.status
+      : (error.type === 'entity.too.large' || error instanceof multer.MulterError ? 400 : 500);
+    res.status(status)
       .json({ error: message || 'An unexpected error occurred' });
   });
   return app;

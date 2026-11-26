@@ -341,6 +341,7 @@ describe('CitationDialog', () => {
     );
 
     // 1. Confident with PDF does NOT auto-download; user clicks Download PDF explicitly
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Search' }));
     expect(await screen.findByText('Exact match found.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -370,6 +371,88 @@ describe('CitationDialog', () => {
     expect(textarea).toHaveValue('New query');
 
     await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('supports From URL tab when allowUrl is enabled, including success, duplicate, and scan errors', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ paper: { id: 'p-url-1', title: 'GPT-2 Paper' }, existing: false })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ paper: { id: 'p-url-1', title: 'GPT-2 Paper' }, existing: true })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        json: async () => ({ error: 'PDF rejected: embedded JavaScript is not allowed (/JavaScript)' })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onClose = vi.fn();
+    const onPaperAdded = vi.fn().mockResolvedValue(undefined);
+    const onOpenPaper = vi.fn();
+
+    render(
+      <CitationDialog
+        open
+        allowUrl
+        title="Find a paper"
+        hint="Search by title or DOI"
+        initialText=""
+        label="Paper title or DOI"
+        onClose={onClose}
+        onPaperAdded={onPaperAdded}
+        onOpenPaper={onOpenPaper}
+      />
+    );
+
+    const searchTab = screen.getByRole('tab', { name: 'Search' });
+    const urlTab = screen.getByRole('tab', { name: 'From URL' });
+    expect(searchTab).toHaveAttribute('aria-selected', 'true');
+    expect(urlTab).toHaveAttribute('aria-selected', 'false');
+
+    await user.click(urlTab);
+    expect(urlTab).toHaveAttribute('aria-selected', 'true');
+
+    const urlInput = screen.getByLabelText('PDF URL');
+    const titleInput = screen.getByLabelText('Title (optional)');
+    await user.type(urlInput, 'https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf');
+    await user.type(titleInput, 'GPT-2 Paper');
+    await user.click(screen.getByRole('button', { name: 'Add PDF' }));
+
+    expect(await screen.findByText('PDF added to your library.')).toBeInTheDocument();
+    expect(onPaperAdded).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Open paper' })).toBeInTheDocument();
+
+    // Duplicate response shows Open existing paper
+    await user.click(screen.getByRole('button', { name: 'Add PDF' }));
+    expect(await screen.findByText('This paper is already in your library.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open existing paper' })).toBeInTheDocument();
+
+    // Security scan rejection displays error message
+    await user.click(screen.getByRole('button', { name: 'Add PDF' }));
+    expect(await screen.findByText(/embedded JavaScript is not allowed/)).toBeInTheDocument();
+
+    // Switching back to Search tab clears URL status and shows search input
+    await user.click(searchTab);
+    expect(screen.getByLabelText('Paper title or DOI')).toBeInTheDocument();
+
+    // Switch back to From URL, add again, and open paper
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ paper: { id: 'p-url-1', title: 'GPT-2 Paper' }, existing: true })
+    });
+    await user.click(urlTab);
+    await user.click(screen.getByRole('button', { name: 'Add PDF' }));
+    await user.click(await screen.findByRole('button', { name: 'Open existing paper' }));
+    expect(onOpenPaper).toHaveBeenCalledWith('p-url-1');
     expect(onClose).toHaveBeenCalled();
   });
 

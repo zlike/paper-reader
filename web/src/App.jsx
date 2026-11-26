@@ -19,13 +19,15 @@ const ADD_PAPER_DIALOG = {
   hint: 'Search for a paper by title or DOI.',
   initialText: '',
   label: 'Paper title or DOI',
-  autoSearch: false
+  autoSearch: false,
+  allowUrl: true
 };
 
 const CITATION_DIALOG = {
   title: 'Find a cited paper',
   hint: 'Check the text below. For numbered citations, select the full reference from the bibliography instead.',
-  label: 'Citation text'
+  label: 'Citation text',
+  allowUrl: false
 };
 
 function syncHistoryPath(targetPath, history, state) {
@@ -366,6 +368,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
         initialText={dialogState.initialText}
         label={dialogState.label}
         autoSearch={dialogState.autoSearch}
+        allowUrl={Boolean(dialogState.allowUrl)}
         onClose={handleCloseDialog}
         onPaperAdded={refreshLibrary}
         onOpenPaper={id => openPaper(id)}

@@ -22,6 +22,17 @@ export async function startTestServer() {
     'Exact DOI Paper Page 1: Deterministic Retrieval',
     'Exact DOI Paper Page 2: Conclusion'
   ]);
+  const urlPaperPdf = createTestPdf([
+    'URL Paper Page 1: Unsupervised Multitask Learners',
+    'URL Paper Page 2: Zero-Shot Task Transfer'
+  ]);
+  const maliciousJsPdf = Buffer.from(
+    urlPaperPdf.toString('latin1').replace(
+      '/Type /Catalog ',
+      '/Type /Catalog /OpenAction << /S /JavaScript /JS (app.alert(1)) >> '
+    ),
+    'latin1'
+  );
 
   const services = {
     searchCitation: async text => {
@@ -84,6 +95,14 @@ export async function startTestServer() {
       };
     },
     downloadPdf: async (url, destination) => {
+      if (url.includes('malicious')) {
+        await writeFile(destination, maliciousJsPdf);
+        return;
+      }
+      if (url.includes('language_models')) {
+        await writeFile(destination, urlPaperPdf);
+        return;
+      }
       const buf = url.includes('exact') ? exactDoiPdf : citedPdf;
       await writeFile(destination, buf);
     }
