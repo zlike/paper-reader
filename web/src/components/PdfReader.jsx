@@ -7,8 +7,9 @@ import {
   useState
 } from 'react';
 import { loadPdfjs } from '../lib/pdfjs.js';
-import { destinationPosition } from '../lib/pdf-links.js';
+import { destinationPosition, findLinkAtPoint } from '../lib/pdf-links.js';
 import { computeReadingPosition, computeScrollTop } from '../lib/reading-progress.js';
+import { useLinkHover } from '../hooks/useLinkHover.js';
 import { PdfPage } from './PdfPage.jsx';
 import { LinkPreviewDialog } from './LinkPreviewDialog.jsx';
 
@@ -309,21 +310,13 @@ export function PdfReader({
     }
   }, [handleLinkError]);
 
+  const linkHoverHandlers = useLinkHover();
+
   const handlePagesClick = useCallback(event => {
     if (event.target.closest('.annotationLayer') || !window.getSelection()?.isCollapsed) return;
     const page = event.target.closest('.page');
-    if (!page) return;
     // Hit-test links after selection so link overlays never block selecting PDF text.
-    for (const link of page.querySelectorAll('.linkAnnotation > a')) {
-      const rect = link.getBoundingClientRect();
-      if (
-        event.clientX >= rect.left && event.clientX <= rect.right &&
-        event.clientY >= rect.top && event.clientY <= rect.bottom
-      ) {
-        link.click();
-        break;
-      }
-    }
+    findLinkAtPoint(page, event.clientX, event.clientY)?.click();
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -351,7 +344,7 @@ export function PdfReader({
           </>
         )}
       </div>
-      <div id="pages" ref={pagesContainerRef} onClick={handlePagesClick}>
+      <div id="pages" ref={pagesContainerRef} onClick={handlePagesClick} {...linkHoverHandlers}>
         {pageSlots.map(slot => (
           <PdfPage
             key={`${paperId}-${slot.pageNumber}`}

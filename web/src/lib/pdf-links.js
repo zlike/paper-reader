@@ -16,6 +16,21 @@ export function isSupportedLink(annotation) {
   return Boolean(annotation.dest) || PAGE_ACTIONS.has(annotation.action);
 }
 
+export function findLinkAtPoint(page, clientX, clientY) {
+  if (!page) return null;
+  for (const link of page.querySelectorAll('.linkAnnotation > a')) {
+    const rect = link.getBoundingClientRect();
+    if (
+      rect.right > rect.left && rect.bottom > rect.top &&
+      clientX >= rect.left && clientX <= rect.right &&
+      clientY >= rect.top && clientY <= rect.bottom
+    ) {
+      return link;
+    }
+  }
+  return null;
+}
+
 export async function resolveDestination(document, destination) {
   const explicit = typeof destination === 'string'
     ? await document.getDestination(destination)

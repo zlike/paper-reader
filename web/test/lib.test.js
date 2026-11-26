@@ -10,6 +10,7 @@ import { loadPdfjs, resetPdfjsCache } from '../src/lib/pdfjs.js';
 import {
   computePreviewTarget,
   destinationPosition,
+  findLinkAtPoint,
   isSafeExternalUrl,
   isSupportedLink,
   resolveDestination
@@ -211,6 +212,31 @@ describe('pdf-links', () => {
       scrollLeft: 0,
       includeNextPage: true
     });
+  });
+
+  it('hit-tests .linkAnnotation > a bounding rects within a page', () => {
+    expect(findLinkAtPoint(null, 10, 10)).toBeNull();
+
+    const page = document.createElement('div');
+    page.className = 'page';
+    const emptySection = document.createElement('section');
+    emptySection.className = 'linkAnnotation';
+    const zeroLink = document.createElement('a');
+    vi.spyOn(zeroLink, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 0, top: 0, bottom: 0 });
+    emptySection.append(zeroLink);
+
+    const activeSection = document.createElement('section');
+    activeSection.className = 'linkAnnotation';
+    const activeLink = document.createElement('a');
+    vi.spyOn(activeLink, 'getBoundingClientRect').mockReturnValue({ left: 20, right: 80, top: 30, bottom: 50 });
+    activeSection.append(activeLink);
+
+    page.append(emptySection, activeSection);
+
+    expect(findLinkAtPoint(page, 0, 0)).toBeNull();
+    expect(findLinkAtPoint(page, 50, 40)).toBe(activeLink);
+    expect(findLinkAtPoint(page, 19, 40)).toBeNull();
+    expect(findLinkAtPoint(page, 50, 51)).toBeNull();
   });
 });
 

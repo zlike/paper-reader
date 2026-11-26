@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import { useSwipeToClose } from '../src/hooks/useSwipeToClose.js';
 import { useReadingProgress } from '../src/hooks/useReadingProgress.js';
 import { useTextSelection } from '../src/hooks/useTextSelection.js';
+import { LINK_HOVER_CLASS, useLinkHover } from '../src/hooks/useLinkHover.js';
 import { STORAGE_KEY } from '../src/lib/reading-progress.js';
 
 afterEach(() => {
@@ -180,5 +181,93 @@ describe('useTextSelection', () => {
       document.dispatchEvent(new Event('selectionchange'));
     });
     expect(getByTestId('selected')).toHaveTextContent('');
+  });
+});
+
+describe('useLinkHover', () => {
+  function HoverHarness() {
+    const handlers = useLinkHover();
+    return (
+      <div data-testid="pages" {...handlers}>
+        <div className="page" data-testid="page-1">
+          <div className="annotationLayer">
+            <section className="linkAnnotation">
+              <a data-testid="link-1" href="#p2">Link 1</a>
+            </section>
+          </div>
+        </div>
+        <div className="page" data-testid="page-2">
+          <div className="annotationLayer">
+            <section className="linkAnnotation">
+              <a data-testid="link-2" href="#p1">Link 2</a>
+            </section>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  it('toggles page--link-hover on desktop hover and clears on leave, press, drag, touch, selection, and unmount', () => {
+    const { getByTestId, unmount } = render(<HoverHarness />);
+    const pages = getByTestId('pages');
+    const page1 = getByTestId('page-1');
+    const page2 = getByTestId('page-2');
+    const link1 = getByTestId('link-1');
+    const link2 = getByTestId('link-2');
+
+    vi.spyOn(link1, 'getBoundingClientRect').mockReturnValue({ left: 10, right: 60, top: 10, bottom: 30 });
+    vi.spyOn(link2, 'getBoundingClientRect').mockReturnValue({ left: 10, right: 60, top: 100, bottom: 130 });
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+
+    // Hover over link 1 -> adds class
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+
+    // Repeating pointerMove on same link is a no-op
+    fireEvent.pointerMove(page1, { clientX: 30, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+
+    // Moving directly to link on page 2 transfers the class cleanly
+    fireEvent.pointerMove(page2, { clientX: 25, clientY: 115, pointerType: 'mouse', buttons: 0 });
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+    expect(page2).toHaveClass(LINK_HOVER_CLASS);
+
+    // Moving off link on page 2 clears class
+    fireEvent.pointerMove(page2, { clientX: 200, clientY: 200, pointerType: 'mouse', buttons: 0 });
+    expect(page2).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Pointer down while hovered clears class immediately (starting drag selection)
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+    fireEvent.pointerDown(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 1 });
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Dragging with mouse button held down does not activate hover
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 1 });
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Touch pointer is ignored
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'touch', buttons: 0 });
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Non-collapsed text selection clears hover
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: false });
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Pointer leave clears hover
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+    fireEvent.pointerLeave(pages);
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
+
+    // Unmount while hovered cleans up class
+    fireEvent.pointerMove(page1, { clientX: 25, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass(LINK_HOVER_CLASS);
+    unmount();
+    expect(page1).not.toHaveClass(LINK_HOVER_CLASS);
   });
 });
