@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchPapers } from './lib/api.js';
+import { sanitizeTitleForSearch } from './lib/dehyphenate.js';
 import { loadPdfjs } from './lib/pdfjs.js';
 import {
   normalizeZoom,
@@ -272,9 +273,12 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     });
   }, [dismissSelection]);
 
+  const sanitizedSelection = showFindSelection ? sanitizeTitleForSearch(selectedText) : '';
+
   const handleFindSelection = useCallback(() => {
-    handleFindCitation(selectedText);
-  }, [handleFindCitation, selectedText]);
+    if (!sanitizedSelection) return;
+    handleFindCitation(sanitizedSelection, { autoSearch: true });
+  }, [handleFindCitation, sanitizedSelection]);
 
   const handlePreviewOpenChange = useCallback(isOpen => {
     setPreviewOpen(isOpen);
@@ -328,7 +332,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
         id="find-selection"
         type="button"
         className="find-selection-btn"
-        hidden={!showFindSelection}
+        hidden={!sanitizedSelection}
         onClick={handleFindSelection}
       >
         Find cited paper

@@ -162,7 +162,7 @@ test('library Unread/Read categorization, overlay drawer invariants, reading pro
   await expect(page.locator('#current-title')).toHaveText('Second Systems Paper');
 });
 
-test('citation dialog search, DOI auto-download, manual download, and text-selection citation trigger', async ({ page }) => {
+test('citation dialog search, explicit DOI download, manual download, and text-selection citation trigger', async ({ page }) => {
   await server.uploadPdf('Seed Paper', [
     'Seed Paper Page 1: See Transformers for Everyone for details',
     'Seed Paper Page 2: End'
@@ -208,10 +208,21 @@ test('citation dialog search, DOI auto-download, manual download, and text-selec
   const prefilled = await page.locator('#citation-text').inputValue();
   expect(prefilled.length).toBeGreaterThan(0);
 
-  // 3. Exact DOI match auto-downloads
+  // 3. Exact DOI match displays result without auto-downloading; user clicks Download PDF explicitly
+  let downloadRequests = 0;
+  page.on('request', req => {
+    if (req.url().includes('/api/citations/download')) downloadRequests += 1;
+  });
+
   await page.locator('#citation-text').fill('10.1234/exact');
   await page.locator('#search-citation').click();
+  await expect(page.locator('#search-status')).toContainText('Exact match found.');
+  await expect(page.locator('.result').first().getByRole('button', { name: 'Download PDF' })).toBeVisible();
+  expect(downloadRequests).toBe(0);
+
+  await page.locator('.result').first().getByRole('button', { name: 'Download PDF' }).click();
   await expect(page.locator('#search-status')).toContainText('PDF added to your library.');
+  expect(downloadRequests).toBe(1);
   await page.locator('.result').first().getByRole('button', { name: 'Open paper' }).click();
   await expect(page.locator('#current-title')).toHaveText('Exact DOI Match Paper');
 });
@@ -981,6 +992,49 @@ test('LinkPreviewDialog preserves compound hyphen across line wraps for Self-Fee
 
   await expect(page.locator('#citation-dialog')).toBeVisible();
   await expect(page.locator('#citation-text')).toHaveValue('Self-Refine: Iterative Refinement with Self-Feedback');
+});
+
+test('reading-pane "Find cited paper" sanitizes line-wrapped selection and auto-triggers citation search (issue #23)', async ({ page }) => {
+  await server.uploadPdf(
+    'Reading Pane Sanitization Paper',
+    [
+      [
+        { text: 'Self-', x: 72, y: 720, size: 14 },
+        { text: 'feedback for Trans-', x: 72, y: 700, size: 14 },
+        { text: 'formers for Everyone', x: 72, y: 680, size: 14 }
+      ]
+    ]
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Reading Pane Sanitization Paper' }).click();
+
+  const textLayer = page.locator('.page[data-page="1"] .textLayer');
+  await expect(textLayer).toContainText('formers for Everyone');
+
+  // Select across all three wrapped lines in the reading pane
+  await textLayer.evaluate(el => {
+    const spans = Array.from(el.querySelectorAll('span')).filter(s => s.textContent.trim().length > 0);
+    const range = document.createRange();
+    range.setStartBefore(spans[0]);
+    range.setEndAfter(spans[spans.length - 1]);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  const findBtn = page.locator('#find-selection');
+  await expect(findBtn).toBeVisible();
+  await findBtn.click();
+
+  // CitationDialog opens with sanitized query (compound hyphen preserved, split word rejoined) and auto-searches
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#dialog-title')).toHaveText('Find a cited paper');
+  await expect(page.locator('#citation-text')).toHaveValue('Self-feedback for Transformers for Everyone');
+  await expect(page.locator('#search-status')).toContainText('Choose the correct paper');
+  await expect(page.locator('.result')).toHaveCount(2);
+  await expect(page.locator('.result').first()).toContainText('Transformers for Everyone');
 });
 
 
