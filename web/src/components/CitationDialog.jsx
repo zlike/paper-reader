@@ -5,6 +5,19 @@ function candidateKey(candidate) {
   return `${candidate.source}:${candidate.id}`;
 }
 
+const DEFAULT_PROVIDERS = [
+  { id: 'OPENALEX', name: 'OpenAlex' },
+  { id: 'ARXIV', name: 'arXiv' },
+  { id: 'CROSSREF', name: 'Crossref' }
+];
+
+const SOURCE_LABELS = {
+  OPENALEX: 'OpenAlex',
+  ARXIV: 'arXiv',
+  CROSSREF: 'Crossref',
+  SEMANTIC_SCHOLAR: 'Semantic Scholar'
+};
+
 export function CitationDialog({
   open,
   title,
@@ -24,6 +37,7 @@ export function CitationDialog({
   const [text, setText] = useState(initialText || '');
   const [searching, setSearching] = useState(false);
   const [status, setStatus] = useState('');
+  const [providers, setProviders] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [itemStates, setItemStates] = useState({});
 
@@ -78,18 +92,20 @@ export function CitationDialog({
 
   const runSearch = useCallback(async (queryText, session) => {
     setCandidates([]);
+    setProviders([]);
     setItemStates({});
-    setStatus('Searching OpenAlex…');
+    setStatus('Searching papers…');
     setSearching(true);
     try {
       const result = await searchCitations(queryText);
       if (session !== sessionRef.current) return;
+      if (Array.isArray(result.providers)) setProviders(result.providers);
       if (!result.candidates.length) {
         setStatus('No matches found. Try the full title or DOI.');
         return;
       }
       setStatus(result.confident
-        ? 'Exact DOI match found.'
+        ? 'Exact match found.'
         : 'Choose the correct paper from these possible matches.');
       setCandidates(result.candidates);
       if (result.confident?.hasPdf) {
@@ -116,6 +132,7 @@ export function CitationDialog({
       setText(nextText);
       setSearching(false);
       setStatus('');
+      setProviders([]);
       setCandidates([]);
       setItemStates({});
       if (!dialog.open && typeof dialog.showModal === 'function') {
@@ -176,11 +193,64 @@ export function CitationDialog({
         Search
       </button>
       <div id="search-status" role="status">{status}</div>
+      {(searching || providers.length > 0) && (
+        <div className="provider-indicators" aria-label="Search providers">
+          {(searching ? DEFAULT_PROVIDERS : providers).map(provider => {
+            const stateClass = searching
+              ? 'is-searching'
+              : provider.status === 'ok'
+                ? 'is-ok'
+                : provider.status === 'error'
+                  ? 'is-error'
+                  : 'is-empty';
+            const detailText = searching
+              ? 'Searching…'
+              : provider.status === 'ok'
+                ? `${provider.count} ${provider.count === 1 ? 'match' : 'matches'}`
+                : provider.status === 'error'
+                  ? (provider.error || 'Search failed')
+                  : (provider.reason || 'No matches');
+            const badgeText = searching
+              ? null
+              : provider.status === 'ok'
+                ? String(provider.count)
+                : provider.status === 'error'
+                  ? 'Error'
+                  : '0';
+            return (
+              <span
+                key={provider.id}
+                className={`provider-pill ${stateClass}`}
+                title={`${provider.name}: ${detailText}`}
+              >
+                <span className="provider-dot" aria-hidden="true" />
+                <span>{provider.name}</span>
+                {badgeText !== null && (
+                  <span className="provider-count">{badgeText}</span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {!searching && providers.some(provider => provider.status === 'error') && (
+        <ul className="provider-errors" aria-label="Provider errors">
+          {providers
+            .filter(provider => provider.status === 'error')
+            .map(provider => (
+              <li key={provider.id}>
+                <strong>{provider.name}:</strong> {provider.error || 'Search failed'}
+              </li>
+            ))}
+        </ul>
+      )}
       <div id="results">
         {candidates.map(candidate => {
           const key = candidateKey(candidate);
           const itemState = itemStates[key];
+          const sourceLabel = SOURCE_LABELS[candidate.source];
           const details = [
+            sourceLabel,
             candidate.authors,
             candidate.year,
             candidate.doi && `DOI: ${candidate.doi}`

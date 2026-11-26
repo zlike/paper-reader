@@ -91,6 +91,13 @@ test('upload, limits, citation download, open and persistent library', async t =
   assert.equal(downloaded.status, 201);
   assert.equal((await downloaded.json()).paper.doi, '10.1234/example');
   assert.equal((await (await download()).json()).existing, true);
+  const arxivDownload = await fetch(`${base}/api/citations/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: 'ARXIV', id: '2303.11366', pdfUrls: ['https://evil.invalid/x.pdf'] })
+  });
+  assert.equal(arxivDownload.status, 200);
+  assert.equal((await arxivDownload.json()).existing, true);
   const full = await upload(pdf);
   assert.match((await full.json()).error, /storage limit/);
   const crossOrigin = await fetch(`${base}/api/citations/search`, {

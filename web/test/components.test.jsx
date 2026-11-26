@@ -540,6 +540,63 @@ describe('CitationDialog', () => {
     });
     expect(screen.queryByText('Should Not Render')).not.toBeInTheDocument();
   });
+
+  it('shows provider search indicators while searching and after results return', async () => {
+    const user = userEvent.setup();
+    let resolveSearch;
+    const fetchMock = vi.fn(() => new Promise(resolve => { resolveSearch = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <CitationDialog
+        open
+        title="Find a paper"
+        hint="Hint"
+        initialText="Language models (mostly) know what they know"
+        label="Paper title"
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    // While searching, show active provider pills
+    const bar = screen.getByLabelText('Search providers');
+    expect(bar).toHaveTextContent('OpenAlex');
+    expect(bar).toHaveTextContent('arXiv');
+    expect(bar).toHaveTextContent('Crossref');
+    expect(bar.querySelectorAll('.provider-pill.is-searching')).toHaveLength(3);
+
+    await act(async () => {
+      resolveSearch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          confident: null,
+          candidates: [
+            { source: 'ARXIV', id: '2207.05221', title: 'Language Models (Mostly) Know What They Know', authors: 'Saurav Kadavath', year: 2022, hasPdf: true }
+          ],
+          providers: [
+            { id: 'OPENALEX', name: 'OpenAlex', status: 'error', count: 0, error: 'Rate limited (HTTP 429)' },
+            { id: 'ARXIV', name: 'arXiv', status: 'ok', count: 1 },
+            { id: 'CROSSREF', name: 'Crossref', status: 'empty', count: 0, reason: 'No matches' }
+          ]
+        })
+      });
+    });
+
+    expect(await screen.findByText('Language Models (Mostly) Know What They Know')).toBeInTheDocument();
+    expect(bar.querySelectorAll('.provider-pill.is-ok')).toHaveLength(1);
+    expect(bar.querySelectorAll('.provider-pill.is-error')).toHaveLength(1);
+    expect(bar.querySelectorAll('.provider-pill.is-empty')).toHaveLength(1);
+    expect(bar).toHaveTextContent('arXiv1');
+    expect(bar).toHaveTextContent('OpenAlexError');
+    expect(bar).toHaveTextContent('Crossref0');
+    const errorList = screen.getByLabelText('Provider errors');
+    expect(errorList).toHaveTextContent('OpenAlex: Rate limited (HTTP 429)');
+  });
 });
 
 describe('PdfReader and PdfPage', () => {

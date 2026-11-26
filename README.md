@@ -1,6 +1,6 @@
 # Paper Reader
 
-A phone-friendly PDF library and citation finder. PDFs and a SQLite index are stored in a Docker volume on the device running the container. Citation searches use [OpenAlex](https://openalex.org/); only PDF locations its metadata identifies as open access are downloaded. The service needs internet access for citation searches and downloads.
+A phone-friendly PDF library and citation finder. PDFs and a SQLite index are stored in a Docker volume on the device running the container. Citation searches query [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), and [Crossref](https://www.crossref.org/); only PDF locations identified as open access are downloaded. The service needs internet access for citation searches and downloads.
 
 ## Run on your phone
 
@@ -17,6 +17,9 @@ BIND_ADDRESS=0.0.0.0
 HOST_PORT=3000
 MAX_PDF_MB=50
 MAX_STORAGE_MB=1024
+# Optional: free OpenAlex API key for higher daily search quotas
+# (get one at https://help.openalex.org/api/authentication/)
+# OPENALEX_API_KEY=
 ```
 
 Run `docker compose up -d` again, then visit `http://PHONE_LAN_IP:3000` from another device. Choose a different `HOST_PORT` if needed. Do not expose this service to the public internet: **there is no login, encryption, or user isolation**. Anyone who can reach it can read and add papers and trigger downloads. Use only a trusted network; firewall the port where appropriate.
