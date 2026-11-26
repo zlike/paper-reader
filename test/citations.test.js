@@ -279,7 +279,6 @@ test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async
     }
     if (url.includes('api.openalex.org')) return jsonResponse({}, 429);
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     throw new Error(`Unexpected URL: ${url}`);
   };
   const result = await searchCitation(
@@ -357,7 +356,6 @@ test('multi-line Kadavath et al. citation resolves with arXiv ID, wrapped arXiv 
     }
     if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     throw new Error(`Unexpected URL: ${url}`);
   };
 
@@ -450,8 +448,6 @@ test('getCandidate validates and securely re-resolves every supported source', a
     ['ARXIV', 'https://evil.example/a.pdf'],
     ['CROSSREF', 'not-a-doi'],
     ['CROSSREF', 'https://evil.example/10.1234/x'],
-    ['DBLP', '../etc/passwd'],
-    ['DBLP', 'https://evil.example/paper.pdf'],
     ['SEMANTIC_SCHOLAR', 'not-40-hex'],
     ['UNKNOWN', 'W123'],
     [null, 'W123']
@@ -489,7 +485,6 @@ test('OPENALEX_API_KEY sends Bearer auth header, TTL cache avoids repeat calls, 
     }
     if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     return jsonResponse({});
   };
 
@@ -515,7 +510,6 @@ test('OPENALEX_API_KEY sends Bearer auth header, TTL cache avoids repeat calls, 
       year: 2023
     }]));
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     return jsonResponse({});
   };
 
@@ -526,60 +520,4 @@ test('OPENALEX_API_KEY sends Bearer auth header, TTL cache avoids repeat calls, 
   const r2 = await searchCitation('Another Distinct Paper Title For Cooldown Check', rateLimitFetch);
   assert.equal(oaCalls, 1, 'OpenAlex must not be called while in cooldown');
   assert.match(r2.providers.find(p => p.id === 'OPENALEX')?.error || '', /^Daily limit reached \(resets at \d{2}:\d{2} UTC\)$/);
-});
-
-test('DBLP provider parses hits, handles bot-check HTML, and securely resolves getCandidate', async () => {
-  const dblpFetch = async url => {
-    if (url.includes('dblp.org/search/publ/api')) {
-      return jsonResponse({
-        result: {
-          hits: {
-            hit: [{
-              info: {
-                key: 'journals/jmlr/SrivastavaHKSS14',
-                title: 'Dropout: a simple way to prevent neural networks from overfitting.',
-                authors: { author: [{ text: 'Nitish Srivastava' }, { text: 'Geoffrey E. Hinton' }] },
-                year: '2014',
-                ee: 'https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf'
-              }
-            }]
-          }
-        }
-      });
-    }
-    if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
-    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
-    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    return jsonResponse({});
-  };
-
-  const res = await searchCitation('Dropout: A Simple Way to Prevent Neural Networks from Overfitting', dblpFetch);
-  assert.equal(res.candidates[0]?.source, 'DBLP');
-  assert.equal(res.candidates[0]?.id, 'journals/jmlr/SrivastavaHKSS14');
-  assert.equal(res.candidates[0]?.openAccess, true);
-  assert.equal(res.providers.find(p => p.id === 'DBLP')?.status, 'ok');
-
-  const resolved = await getCandidate('DBLP', 'journals/jmlr/SrivastavaHKSS14', dblpFetch);
-  assert.equal(resolved.source, 'DBLP');
-  assert.deepEqual(resolved.pdfUrls, ['https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf']);
-
-  // Anubis bot-check HTML produces a clean user-safe error without breaking other providers
-  const botCheckFetch = async url => {
-    if (url.includes('dblp.org')) {
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => 'text/html' },
-        text: async () => '<!doctype html><html><head><title>Making sure you&#39;re not a bot!</title></head></html>'
-      };
-    }
-    if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
-    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
-    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
-    return jsonResponse({});
-  };
-
-  const botRes = await searchCitation('Dropout: A Simple Way to Prevent Neural Networks from Overfitting', botCheckFetch);
-  assert.equal(botRes.providers.find(p => p.id === 'DBLP')?.status, 'error');
-  assert.equal(botRes.providers.find(p => p.id === 'DBLP')?.error, 'Blocked by bot check');
 });

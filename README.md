@@ -1,6 +1,6 @@
 # Paper Reader
 
-A phone-friendly PDF library and citation finder. PDFs and a SQLite index are stored in a Docker volume on the device running the container. Citation searches query [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), [Crossref](https://www.crossref.org/), and [DBLP](https://dblp.org/); only PDF locations identified as open access are downloaded. The service needs internet access for citation searches and downloads.
+A phone-friendly PDF library and citation finder. PDFs and a SQLite index are stored in a Docker volume on the device running the container. Citation searches query [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), and [Crossref](https://www.crossref.org/); only PDF locations identified as open access are downloaded. The service needs internet access for citation searches and downloads.
 
 ## Run on your phone
 

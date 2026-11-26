@@ -2,7 +2,6 @@ const OPENALEX_API = 'https://api.openalex.org/works';
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const DATACITE_API = 'https://api.datacite.org/dois';
 const CROSSREF_API = 'https://api.crossref.org/works';
-const DBLP_API = 'https://dblp.org/search/publ/api';
 const S2_API = 'https://api.semanticscholar.org/graph/v1/paper';
 
 const ENGINE_TIMEOUT_MS = 12000;
@@ -19,18 +18,7 @@ const MODERN_ARXIV_RE = /^\d{4}\.\d{4,5}(?:v\d+)?$/;
 const LEGACY_ARXIV_RE = /^[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?$/;
 const ARXIV_IN_TEXT_RE = /(?:arxiv(?:\.org\/(?:abs|pdf))?[:/]\s*|arxiv\s+preprint\s+(?:arxiv[:/]\s*)?|10\.48550\/arxiv\.)(\d{4}\.\s*\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)(?:\.pdf)?(?=$|[\s.,;:)\]}>"'])/i;
 const BARE_ARXIV_RE = /^\s*\[?\s*(\d{4}\.\d{4,5}(?:v\d+)?)\s*\]?\s*$/;
-const DBLP_ID_RE = /^[a-z0-9/_-]+$/i;
 const S2_ID_RE = /^[0-9a-f]{40}$/i;
-const TRUSTED_OA_PDF_HOSTS = new Set([
-  'arxiv.org',
-  'aclanthology.org',
-  'proceedings.mlr.press',
-  'openaccess.thecvf.com',
-  'papers.nips.cc',
-  'proceedings.neurips.cc',
-  'jmlr.org',
-  'www.jmlr.org'
-]);
 
 export function clearSearchCache() {
   searchCache.clear();
@@ -744,87 +732,6 @@ function buildArxivPrefixQuery(subtitle) {
   return `${tiClause}+AND+${restClause}`;
 }
 
-function parseDblpHit(hit) {
-  const info = hit?.info;
-  if (!info?.title) return null;
-  const rawKey = typeof info.key === 'string' ? info.key.trim() : '';
-  if (!rawKey || !DBLP_ID_RE.test(rawKey) || rawKey.includes('..')) return null;
-
-  const title = String(info.title).replace(/\.$/, '').replace(/\s+/g, ' ').trim();
-  if (!title) return null;
-
-  const rawAuthors = info.authors?.author;
-  const authorList = Array.isArray(rawAuthors) ? rawAuthors : rawAuthors ? [rawAuthors] : [];
-  const authors = authorList
-    .map(a => (typeof a === 'string' ? a : a?.text))
-    .filter(Boolean)
-    .slice(0, 5)
-    .join(', ');
-
-  const year = Number(info.year) || null;
-  const doi = typeof info.doi === 'string' && STRICT_DOI_RE.test(info.doi.trim())
-    ? info.doi.trim().toLowerCase()
-    : null;
-
-  const eeList = Array.isArray(info.ee) ? info.ee : info.ee ? [info.ee] : [];
-  let arxivId = doi ? extractArxivId(doi) : null;
-  const pdfUrls = [];
-  for (const rawUrl of eeList) {
-    if (typeof rawUrl !== 'string') continue;
-    if (!arxivId) {
-      const fromUrl = extractArxivId(rawUrl);
-      if (fromUrl) arxivId = fromUrl;
-    }
-    try {
-      const parsed = new URL(rawUrl);
-      if (parsed.protocol === 'https:' && TRUSTED_OA_PDF_HOSTS.has(parsed.hostname.toLowerCase()) && parsed.pathname.toLowerCase().endsWith('.pdf')) {
-        pdfUrls.push(rawUrl);
-      }
-    } catch {
-      // Ignore malformed ee URL
-    }
-  }
-  if (arxivId) {
-    const baseId = stripArxivVersion(arxivId);
-    pdfUrls.unshift(`https://arxiv.org/pdf/${baseId}.pdf`);
-  }
-  const uniquePdfs = [...new Set(pdfUrls)].slice(0, 4);
-
-  return {
-    source: 'DBLP',
-    id: rawKey,
-    title,
-    authors,
-    year,
-    doi,
-    openAccess: uniquePdfs.length > 0,
-    pdfUrls: uniquePdfs,
-    _arxivId: stripArxivVersion(arxivId),
-    _citedBy: 0,
-    _abstract: ''
-  };
-}
-
-async function searchDblp(query, fetchImpl) {
-  const params = new URLSearchParams({ q: query, format: 'json', h: '8' });
-  const response = await fetchJson(`${DBLP_API}?${params}`, fetchImpl, ENGINE_TIMEOUT_MS, { Accept: 'application/json' });
-  if (!response.ok) throw new Error(`DBLP search failed (HTTP ${response.status})`);
-  const contentType = response.headers?.get?.('content-type') || '';
-  const bodyText = await response.text();
-  if (contentType.includes('text/html') || /^\s*<!doctype\s+html/i.test(bodyText) || /making sure you(?:'|&#39;)re not a bot/i.test(bodyText)) {
-    throw createProviderError('Blocked by bot check');
-  }
-  let data;
-  try {
-    data = JSON.parse(bodyText);
-  } catch {
-    throw createProviderError('Invalid response');
-  }
-  const rawHits = data.result?.hits?.hit;
-  const hits = Array.isArray(rawHits) ? rawHits : rawHits ? [rawHits] : [];
-  return hits.map(parseDblpHit).filter(Boolean);
-}
-
 async function lookupOpenAlexByDoi(doi, fetchImpl, timeoutMs = LOOKUP_TIMEOUT_MS) {
   assertOpenAlexAvailable();
   const response = await fetchJson(`${OPENALEX_API}/https://doi.org/${encodeURIComponent(doi)}`, fetchImpl, timeoutMs, openAlexHeaders());
@@ -865,7 +772,6 @@ const PROVIDER_NAMES = {
   OPENALEX: 'OpenAlex',
   ARXIV: 'arXiv',
   CROSSREF: 'Crossref',
-  DBLP: 'DBLP',
   SEMANTIC_SCHOLAR: 'Semantic Scholar'
 };
 
@@ -1026,17 +932,16 @@ export async function searchCitation(text, fetchImpl = fetch, options = {}) {
     return finish({ candidates: [], confident: null, providers: tracker.toList() });
   }
 
-  // Federated parallel search across OpenAlex, arXiv (with DataCite arXiv fallback), Crossref, DBLP, and optional Semantic Scholar
+  // Federated parallel search across OpenAlex, arXiv (with DataCite arXiv fallback), Crossref, and optional Semantic Scholar
   const titleQuery = parsed.bibTitle || parsed.query;
   const isShortTitle = titleQuery.split(/\s+/).filter(Boolean).length <= 3;
-  const providerIds = ['OPENALEX', 'ARXIV', 'CROSSREF', 'DBLP'];
+  const providerIds = ['OPENALEX', 'ARXIV', 'CROSSREF'];
   if (process.env.S2_API_KEY) providerIds.push('SEMANTIC_SCHOLAR');
   const tracker = createProviderTracker(providerIds);
 
   const engineSpecs = [
     { provider: 'OPENALEX', promise: searchOpenAlex(titleQuery, fetchImpl, { titleOnly: true, sortByCitations: isShortTitle }) },
-    { provider: 'CROSSREF', promise: searchCrossref(parsed.query, fetchImpl) },
-    { provider: 'DBLP', promise: searchDblp(titleQuery, fetchImpl) }
+    { provider: 'CROSSREF', promise: searchCrossref(parsed.query, fetchImpl) }
   ];
   const arxivQuery = buildArxivQuery(titleQuery);
   if (arxivQuery) {
@@ -1175,34 +1080,6 @@ export async function getCandidate(source, id, fetchImpl = fetch) {
       }
       item.pdfUrls = [...new Set([...item.pdfUrls, ...extraPdfs])].slice(0, 4);
       item.openAccess = item.pdfUrls.length > 0;
-    }
-    return stripInternal(item);
-  }
-
-  if (source === 'DBLP') {
-    if (!DBLP_ID_RE.test(id) || id.includes('..')) throw new Error('Invalid paper identifier');
-    const hits = await searchDblp(id, fetchImpl);
-    const item = hits.find(hit => hit.id === id);
-    if (!item) throw new Error('Paper not found in DBLP');
-    if (!item.openAccess) {
-      const enrichers = [];
-      if (item.doi && !getOpenAlexCooldown()) {
-        enrichers.push(lookupOpenAlexByDoi(item.doi, fetchImpl, ENGINE_TIMEOUT_MS));
-      }
-      if (item._arxivId) {
-        enrichers.push(lookupArxivById(item._arxivId, fetchImpl, ENGINE_TIMEOUT_MS));
-      }
-      if (enrichers.length) {
-        const settled = await Promise.allSettled(enrichers);
-        const extraPdfs = [];
-        for (const res of settled) {
-          if (res.status === 'fulfilled' && res.value?.pdfUrls?.length) {
-            extraPdfs.push(...res.value.pdfUrls);
-          }
-        }
-        item.pdfUrls = [...new Set([...item.pdfUrls, ...extraPdfs])].slice(0, 4);
-        item.openAccess = item.pdfUrls.length > 0;
-      }
     }
     return stripInternal(item);
   }
