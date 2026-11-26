@@ -13,6 +13,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
+COPY web/src/lib/dehyphenate.js ./web/src/lib/dehyphenate.js
 COPY --from=builder /app/dist ./dist
 RUN mkdir -p /data && chown node:node /data
 USER node

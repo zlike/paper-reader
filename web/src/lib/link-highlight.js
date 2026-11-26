@@ -1,3 +1,6 @@
+import { sanitizeTitleForSearch } from './dehyphenate.js';
+
+export { sanitizeTitleForSearch };
 export const HIGHLIGHT_CLASS = 'link-target-highlight';
 
 const MAX_ENTRY_LINES = 40;
@@ -825,20 +828,6 @@ export function applyHighlightRange(segments, start, end) {
   }
 
   return marks;
-}
-
-export function sanitizeTitleForSearch(rawTitle) {
-  if (!rawTitle || typeof rawTitle !== 'string') return '';
-  return rawTitle
-    // Remove soft hyphens and any following line-break whitespace
-    .replace(/\u00AD\s*/g, '')
-    // Join words broken across PDF line wraps with a hyphen, en-dash, or em-dash
-    .replace(/([\p{L}\p{N}])[\-\u2010\u2011\u2012\u2013\u2014]\s+(?=[\p{L}\p{N}])/gu, '$1')
-    // Remove remaining en-dashes and em-dashes (e.g. used as line breaks or separators)
-    .replace(/[\u2013\u2014]+/g, ' ')
-    // Collapse and trim whitespace
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 export function highlightLinkTarget({ targetTextLayer, nextTextLayer = null, point }) {

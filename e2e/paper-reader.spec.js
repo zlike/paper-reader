@@ -944,3 +944,43 @@ test('LinkPreviewDialog shows "Find selected paper" for highlighted title, strip
   expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
 });
 
+test('LinkPreviewDialog preserves compound hyphen across line wraps for Self-Feedback while joining split words (issue #20)', async ({ page }) => {
+  await server.uploadPdf(
+    'Compound Hyphen Citation Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720, size: 16 },
+        { text: 'See Madaan et al. [1] for iterative refinement.', x: 72, y: 420, size: 14 }
+      ],
+      [
+        { text: 'References', x: 72, y: 720, size: 16 },
+        { text: '[1] A. Madaan. Self-Refine: Iterative Re-', x: 72, y: 660, size: 12 },
+        { text: 'finement with Self-', x: 84, y: 644, size: 12 },
+        { text: 'Feedback. In NeurIPS, 2023.', x: 84, y: 628, size: 12 }
+      ]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 405, 360, 440], destX: 72, destY: 672 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Compound Hyphen Citation Paper' }).click();
+
+  const internalLink = page.locator('.page[data-page="1"] .linkAnnotation > a').first();
+  await expect(internalLink).toBeAttached();
+  const linkBox = await internalLink.boundingBox();
+  await page.mouse.click(linkBox.x + 20, linkBox.y + linkBox.height / 2);
+
+  await expect(page.locator('#link-preview-dialog')).toBeVisible();
+  const findBtn = page.locator('#link-preview-find-selection');
+  await expect(findBtn).toBeVisible();
+  await findBtn.click();
+
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#citation-text')).toHaveValue('Self-Refine: Iterative Refinement with Self-Feedback');
+});
+
+

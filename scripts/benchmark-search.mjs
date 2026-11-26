@@ -120,6 +120,18 @@ const CASES = [
     expectedArxiv: '2212.08073',
     expectedTitle: 'Constitutional AI: Harmlessness from AI Feedback'
   },
+  {
+    category: 'arxiv-preprint',
+    query: 'Self-Refine: Iterative Refinement with Self-Feedback',
+    expectedArxiv: '2303.17651',
+    expectedTitle: 'Self-Refine: Iterative Refinement with Self-Feedback'
+  },
+  {
+    category: 'arxiv-preprint',
+    query: 'Self-Refine: Iterative Refinement with Self-\nFeedback',
+    expectedArxiv: '2303.17651',
+    expectedTitle: 'Self-Refine: Iterative Refinement with Self-Feedback'
+  },
 
   // --- Conference proceedings (NeurIPS / ICML / ICLR / ACL / CVPR) ---
   {
