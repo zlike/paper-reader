@@ -489,6 +489,87 @@ test('hyperlink preview modal touch ergonomics on iPad mini viewport', async ({ 
   }
 });
 
+test('LinkPreviewDialog highlights cited paper title, preserves selection + Find cited paper, and ignores external URL links', async ({ page }) => {
+  await server.uploadPdf(
+    'Bibliography Highlight Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720, size: 16 },
+        { text: 'See citation [1] for the transformer architecture.', x: 72, y: 660, size: 14 },
+        { text: 'External website: https://example.org/paper', x: 72, y: 610, size: 14 }
+      ],
+      [
+        { text: 'References', x: 72, y: 720, size: 16 },
+        { text: '[1] A. Vaswani, N. Shazeer. Attention Is All You Need. In NeurIPS, 2017.', x: 72, y: 660, size: 12 },
+        { text: '[2] K. He, X. Zhang. Deep Residual Learning for Image Recognition. In CVPR, 2016.', x: 72, y: 632, size: 12 }
+      ]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 645, 380, 680], destX: 72, destY: 672 },
+        { fromPage: 1, url: 'https://example.org/paper', rect: [72, 595, 380, 630] }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Bibliography Highlight Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const internalLink = page1.locator('.linkAnnotation > a[aria-label="Go to link in this paper"]');
+  const externalLink = page1.locator('.linkAnnotation > a[aria-label="Open external link in a new tab"]');
+  await expect(internalLink).toBeAttached();
+  await expect(externalLink).toBeAttached();
+
+  // Verify external URL link opens in a new tab and never triggers LinkPreviewDialog
+  await expect(externalLink).toHaveAttribute('href', 'https://example.org/paper');
+  await expect(externalLink).toHaveAttribute('target', '_blank');
+  await page.route('https://example.org/**', route => route.fulfill({ status: 200, body: 'ok' }));
+  const popupPromise = page.waitForEvent('popup');
+  const extBox = await externalLink.boundingBox();
+  await page.mouse.click(extBox.x + 20, extBox.y + extBox.height / 2);
+  const popup = await popupPromise;
+  await popup.close();
+  await expect(page.locator('#link-preview-dialog')).not.toBeVisible();
+
+  // Click internal citation link -> LinkPreviewDialog opens and highlights ONLY the cited paper title
+  const intBox = await internalLink.boundingBox();
+  await page.mouse.click(intBox.x + 20, intBox.y + intBox.height / 2);
+  const previewDialog = page.locator('#link-preview-dialog');
+  await expect(previewDialog).toBeVisible();
+
+  const highlightMarks = page.locator('#link-preview-pages .page[data-page="2"] mark.link-target-highlight');
+  await expect(highlightMarks.first()).toBeVisible();
+
+  const highlightedText = await highlightMarks.evaluateAll(nodes => nodes.map(n => n.textContent).join(''));
+  expect(highlightedText).toBe('Attention Is All You Need');
+
+  // Verify highlight styling uses a translucent background and transparent text so canvas text stays readable
+  const markStyle = await highlightMarks.first().evaluate(el => {
+    const s = getComputedStyle(el);
+    return { color: s.color, backgroundColor: s.backgroundColor };
+  });
+  expect(markStyle.color).toBe('rgba(0, 0, 0, 0)');
+  expect(markStyle.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+
+  // Selecting text directly on the highlighted <mark> still triggers "Find cited paper"
+  await highlightMarks.first().evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  const modalFindBtn = page.locator('#link-preview-find-selection');
+  await expect(modalFindBtn).toBeVisible();
+  await modalFindBtn.click();
+
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#citation-text')).toHaveValue('Attention Is All You Need');
+});
+
 test('desktop mouse hover over PDF links shows pointer cursor in reader and link preview dialog without blocking text selection', async ({ page }) => {
   await server.uploadPdf(
     'Desktop Link Cursor Paper',

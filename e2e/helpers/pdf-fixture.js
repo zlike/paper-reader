@@ -31,14 +31,19 @@ export function createTestPdf(
       ? entry
       : [{ text: entry, x: 72, y: 720 }];
     const stream = lines
-      .map(line => `BT /F1 18 Tf ${line.x ?? 72} ${line.y ?? 720} Td (${escapePdfText(line.text)}) Tj ET`)
+      .map(line => `BT /F1 ${line.size ?? 18} Tf ${line.x ?? 72} ${line.y ?? 720} Td (${escapePdfText(line.text)}) Tj ET`)
       .join('\n');
     const contentId = addObj(`<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream`);
 
     const pageLinks = links.filter(link => link.fromPage === idx + 1);
     const annotIds = pageLinks.map(link => {
-      const targetPageId = pageIds[link.toPage - 1];
       const [x1, y1, x2, y2] = link.rect || [72, 700, 280, 745];
+      if (link.url) {
+        return addObj(
+          `<< /Type /Annot /Subtype /Link /Rect [${x1} ${y1} ${x2} ${y2}] /Border [0 0 0] /A << /Type /Action /S /URI /URI (${escapePdfText(link.url)}) >> >>`
+        );
+      }
+      const targetPageId = pageIds[link.toPage - 1];
       const dest = link.destY != null
         ? `[${targetPageId} 0 R /XYZ ${link.destX ?? 72} ${link.destY} null]`
         : `[${targetPageId} 0 R /Fit]`;

@@ -11,9 +11,12 @@ export function PdfPage({
   layoutKey,
   onNavigateDestination,
   onLinkError,
-  registerElement
+  registerElement,
+  onRendered
 }) {
   const containerRef = useRef(null);
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
 
   const setContainerRef = useCallback(node => {
     containerRef.current = node;
@@ -119,6 +122,7 @@ export function PdfPage({
           );
         }
         element.dataset.rendered = 'true';
+        onRenderedRef.current?.(pageNumber, element);
       } catch (error) {
         if (!cancelled && element.isConnected) {
           element.textContent = `Unable to render page: ${error.message}`;
