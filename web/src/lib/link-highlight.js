@@ -827,17 +827,31 @@ export function applyHighlightRange(segments, start, end) {
   return marks;
 }
 
+export function sanitizeTitleForSearch(rawTitle) {
+  if (!rawTitle || typeof rawTitle !== 'string') return '';
+  return rawTitle
+    // Remove soft hyphens and any following line-break whitespace
+    .replace(/\u00AD\s*/g, '')
+    // Join words broken across PDF line wraps with a hyphen, en-dash, or em-dash
+    .replace(/([\p{L}\p{N}])[\-\u2010\u2011\u2012\u2013\u2014]\s+(?=[\p{L}\p{N}])/gu, '$1')
+    // Remove remaining en-dashes and em-dashes (e.g. used as line breaks or separators)
+    .replace(/[\u2013\u2014]+/g, ' ')
+    // Collapse and trim whitespace
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function highlightLinkTarget({ targetTextLayer, nextTextLayer = null, point }) {
   clearTargetHighlights(targetTextLayer);
   clearTargetHighlights(nextTextLayer);
-  if (!targetTextLayer) return { marks: [], text: '', entryText: '', matchedTitle: false };
+  if (!targetTextLayer) return { marks: [], text: '', entryText: '', matchedTitle: false, searchTitle: '' };
 
   const targetWidth = targetTextLayer.getBoundingClientRect().width;
   const targetItems = extractTextItems(targetTextLayer, 0);
   const targetLines = groupItemsIntoLines(targetItems, targetWidth);
   const targetIndex = findTargetLineIndex(targetLines, point);
   if (targetIndex < 0) {
-    return { marks: [], text: '', entryText: '', matchedTitle: false };
+    return { marks: [], text: '', entryText: '', matchedTitle: false, searchTitle: '' };
   }
 
   const nextLines = nextTextLayer
@@ -848,10 +862,12 @@ export function highlightLinkTarget({ targetTextLayer, nextTextLayer = null, poi
   const titleRange = extractTitleRange(entry.text);
   const range = titleRange || trimRange(entry.text, 0, entry.text.length);
   const marks = applyHighlightRange(entry.segments, range.start, range.end);
+  const text = entry.text.slice(range.start, range.end);
   return {
     marks,
-    text: entry.text.slice(range.start, range.end),
+    text,
     entryText: entry.text,
-    matchedTitle: Boolean(titleRange)
+    matchedTitle: Boolean(titleRange),
+    searchTitle: sanitizeTitleForSearch(text)
   };
 }

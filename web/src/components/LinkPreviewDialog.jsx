@@ -24,6 +24,7 @@ export function LinkPreviewDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [previewState, setPreviewState] = useState(null);
+  const [highlightedTitle, setHighlightedTitle] = useState('');
 
   const {
     selectedText,
@@ -57,6 +58,7 @@ export function LinkPreviewDialog({
       dismissSelection();
       setError('');
       setPreviewState(null);
+      setHighlightedTitle('');
       setLoading(false);
       if (dialog.open && typeof dialog.close === 'function') {
         dialog.close();
@@ -73,6 +75,7 @@ export function LinkPreviewDialog({
     setLoading(true);
     setError('');
     setPreviewState(null);
+    setHighlightedTitle('');
     dismissSelection();
 
     (async () => {
@@ -158,11 +161,12 @@ export function LinkPreviewDialog({
       ? renderedPagesRef.current.get(nextSlot.pageNumber)?.querySelector('.textLayer') || null
       : null;
 
-    highlightLinkTarget({
+    const result = highlightLinkTarget({
       targetTextLayer,
       nextTextLayer,
       point: previewState.targetPoint
     });
+    setHighlightedTitle(result.matchedTitle ? result.searchTitle : '');
   }, [previewState]);
 
   const handleNativeClose = useCallback(() => {
@@ -199,12 +203,15 @@ export function LinkPreviewDialog({
     onJumpToTarget(resolved);
   }, [previewState, closeDialog, onJumpToTarget]);
 
+  const findQuery = showFindSelection ? selectedText : highlightedTitle;
+  const showFindButton = Boolean(findQuery);
+
   const handleFindCitedPaper = useCallback(() => {
-    const text = selectedText;
+    if (!findQuery) return;
     clearModalSelection();
     dismissSelection();
-    onFindCitation?.(text);
-  }, [selectedText, clearModalSelection, dismissSelection, onFindCitation]);
+    onFindCitation?.(findQuery, { autoSearch: true });
+  }, [findQuery, clearModalSelection, dismissSelection, onFindCitation]);
 
   const handleInternalNavigate = useCallback(async (_doc, nextDestination) => {
     onNavigateInternal(nextDestination);
@@ -300,10 +307,10 @@ export function LinkPreviewDialog({
           id="link-preview-find-selection"
           type="button"
           className="find-selection-btn link-preview-find-btn"
-          hidden={!showFindSelection}
+          hidden={!showFindButton}
           onClick={handleFindCitedPaper}
         >
-          Find cited paper
+          Find selected paper
         </button>
       </div>
     </dialog>

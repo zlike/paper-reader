@@ -1,5 +1,10 @@
 function escapePdfText(text) {
-  return String(text).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+    .replace(/\u2013/g, '\\226')
+    .replace(/\u2014/g, '\\227');
 }
 
 /**
@@ -20,7 +25,7 @@ export function createTestPdf(
 
   const catalogId = addObj(''); // placeholder 1
   const pagesId = addObj('');   // placeholder 2
-  const fontId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const fontId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
 
   // Pre-allocate page object IDs so link annotations can reference target pages.
   const pageIds = pageTexts.map(() => addObj(''));

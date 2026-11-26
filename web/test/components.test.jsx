@@ -434,6 +434,112 @@ describe('CitationDialog', () => {
     });
     expect(screen.queryByText('PDF added to your library.')).not.toBeInTheDocument();
   });
+
+  it('auto-searches on open when autoSearch is true with non-empty initialText, avoids duplicate calls, and ignores stale results', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        confident: null,
+        candidates: [
+          { source: 'OPENALEX', id: 'W42', title: 'Attention Is All You Need', authors: 'A. Vaswani', year: 2017, hasPdf: true }
+        ]
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(
+      <CitationDialog
+        open
+        title="Find a cited paper"
+        hint="Hint"
+        initialText="Attention Is All You Need"
+        label="Citation text"
+        autoSearch
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText('Attention Is All You Need')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Rerendering with a new onPaperAdded callback must NOT trigger a duplicate auto-search
+    rerender(
+      <CitationDialog
+        open
+        title="Find a cited paper"
+        hint="Hint"
+        initialText="Attention Is All You Need"
+        label="Citation text"
+        autoSearch
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Opening with whitespace-only initialText and autoSearch=true must NOT search
+    rerender(
+      <CitationDialog
+        open
+        title="Find a cited paper"
+        hint="Hint"
+        initialText="   "
+        label="Citation text"
+        autoSearch
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Closing dialog while an auto-search is in flight ignores the stale response
+    let resolveStale;
+    fetchMock.mockImplementationOnce(() => new Promise(resolve => { resolveStale = resolve; }));
+    rerender(
+      <CitationDialog
+        open
+        title="Find a cited paper"
+        hint="Hint"
+        initialText="Stale Auto Query"
+        label="Citation text"
+        autoSearch
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    rerender(
+      <CitationDialog
+        open={false}
+        title="Find a cited paper"
+        hint="Hint"
+        initialText="Stale Auto Query"
+        label="Citation text"
+        autoSearch
+        onClose={vi.fn()}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={vi.fn()}
+      />
+    );
+    await act(async () => {
+      resolveStale({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          confident: null,
+          candidates: [{ source: 'OPENALEX', id: 'W999', title: 'Should Not Render', hasPdf: true }]
+        })
+      });
+    });
+    expect(screen.queryByText('Should Not Render')).not.toBeInTheDocument();
+  });
 });
 
 describe('PdfReader and PdfPage', () => {
@@ -927,7 +1033,7 @@ describe('LinkPreviewDialog', () => {
       }
       async render() {
         const span = document.createElement('span');
-        span.textContent = 'Reference [1] Vaswani et al., Attention Is All You Need';
+        span.textContent = 'Reference [1] Vaswani et al., Attention Is All You Need.';
         this.container.append(span);
       }
     }
@@ -998,11 +1104,18 @@ describe('LinkPreviewDialog', () => {
     // Body auto-scrolled to target near bottom of page 2
     expect(document.getElementById('link-preview-body').scrollTop).toBeGreaterThan(0);
 
-    // Selecting text inside preview textLayer shows Find cited paper button inside modal
+    // Auto-highlighted title immediately makes "Find selected paper" visible without manual selection
+    const findBtn = document.getElementById('link-preview-find-selection');
+    expect(findBtn).toHaveTextContent('Find selected paper');
+    expect(findBtn).not.toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need', { autoSearch: true });
+
+    // Manual text selection inside preview textLayer overrides the auto-highlighted title
     const textNode = previewPages.querySelector('.page[data-page="2"] .textLayer span').firstChild;
     const removeAllRanges = vi.fn();
     vi.spyOn(window, 'getSelection').mockReturnValue({
-      toString: () => 'Attention Is All You Need',
+      toString: () => 'Custom Selected Title',
       anchorNode: textNode,
       isCollapsed: false,
       removeAllRanges
@@ -1011,12 +1124,12 @@ describe('LinkPreviewDialog', () => {
       document.dispatchEvent(new Event('selectionchange'));
     });
 
-    const findBtn = document.getElementById('link-preview-find-selection');
     expect(findBtn).not.toHaveAttribute('hidden');
     fireEvent.click(findBtn);
     expect(removeAllRanges).toHaveBeenCalledTimes(1);
-    expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need');
-    expect(findBtn).toHaveAttribute('hidden');
+    expect(onFindCitation).toHaveBeenLastCalledWith('Custom Selected Title', { autoSearch: true });
+    // After manual selection is dismissed, button remains visible for the auto-highlighted title
+    expect(findBtn).not.toHaveAttribute('hidden');
 
     // Hit-test click on internal link inside preview triggers onNavigateInternal
     const previewPage2 = previewPages.querySelector('.page[data-page="2"]');
@@ -1344,5 +1457,81 @@ describe('LinkPreviewDialog', () => {
       />
     );
     expect(previewPages.querySelectorAll('mark.link-target-highlight')).toHaveLength(0);
+  });
+
+  it('keeps Find selected paper hidden for non-title targets until manual selection, and sanitizes wrapped dashes for title targets', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({ numPages: 3 });
+    const onFindCitation = vi.fn();
+
+    class NonTitleTextLayer {
+      constructor({ container }) {
+        this.container = container;
+      }
+      async render() {
+        const span = document.createElement('span');
+        span.textContent = 'Section 3: Experimental Results';
+        this.container.append(span);
+      }
+    }
+
+    const { rerender } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={{ ...pdfjs, TextLayer: NonTitleTextLayer }}
+        destination="top-p3"
+        requestId={20}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={onFindCitation}
+      />
+    );
+
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.page[data-page="3"]')?.dataset.rendered).toBe('true');
+    });
+
+    const findBtn = document.getElementById('link-preview-find-selection');
+    expect(findBtn).toHaveAttribute('hidden');
+
+    // Now render a wrapped reference title with em/en dashes across lines
+    class WrappedTitleTextLayer {
+      constructor({ container }) {
+        this.container = container;
+      }
+      async render() {
+        const s1 = document.createElement('span');
+        s1.textContent = '[1] A. Vaswani. Atten—';
+        s1.style.left = '40px';
+        s1.style.top = '100px';
+        const s2 = document.createElement('span');
+        s2.textContent = 'tion Is All You Need. NeurIPS, 2017.';
+        s2.style.left = '56px';
+        s2.style.top = '116px';
+        this.container.append(s1, s2);
+      }
+    }
+
+    rerender(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={{ ...pdfjs, TextLayer: WrappedTitleTextLayer }}
+        destination="top-p3"
+        requestId={21}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={onFindCitation}
+      />
+    );
+
+    await waitFor(() => {
+      expect(findBtn).not.toHaveAttribute('hidden');
+    });
+    expect(findBtn).toHaveTextContent('Find selected paper');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need', { autoSearch: true });
   });
 });

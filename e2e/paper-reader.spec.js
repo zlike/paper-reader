@@ -871,3 +871,76 @@ test('pinch-to-zoom and ctrl+wheel zoom only affect reading pane, keep header an
   await page.waitForTimeout(160);
   await expect(page.locator('#zoom-level')).toHaveText('210%');
 });
+
+test('LinkPreviewDialog shows "Find selected paper" for highlighted title, strips line-break dashes, auto-searches CitationDialog, and preserves reader scroll', async ({ page }) => {
+  await server.uploadPdf(
+    'Prefilled Citation Search Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720, size: 16 },
+        { text: 'See reference [1] for transformers.', x: 72, y: 420, size: 14 }
+      ],
+      [
+        { text: 'References', x: 72, y: 720, size: 16 },
+        { text: '[1] J. Researcher. Trans\u2014', x: 72, y: 660, size: 12 },
+        { text: 'formers for Every\u2013', x: 84, y: 644, size: 12 },
+        { text: 'one. In NeurIPS, 2024.', x: 84, y: 628, size: 12 }
+      ]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 405, 340, 440], destX: 72, destY: 672 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Prefilled Citation Search Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const internalLink = page1.locator('.linkAnnotation > a').first();
+  await expect(internalLink).toBeAttached();
+
+  // Scroll reader down slightly before opening link preview
+  await page.locator('#reader').evaluate(el => {
+    el.scrollTop = 100;
+  });
+  const scrollBefore = await page.locator('#reader').evaluate(el => el.scrollTop);
+  expect(scrollBefore).toBeGreaterThanOrEqual(80);
+
+  // Tap internal reference link -> LinkPreviewDialog opens with highlighted title & "Find selected paper" immediately visible (no manual selection)
+  const linkBox = await internalLink.boundingBox();
+  await page.mouse.click(linkBox.x + 20, linkBox.y + linkBox.height / 2);
+  await expect(page.locator('#link-preview-dialog')).toBeVisible();
+
+  const highlightMarks = page.locator('#link-preview-pages .page[data-page="2"] mark.link-target-highlight');
+  await expect(highlightMarks.first()).toBeVisible();
+
+  const findBtn = page.locator('#link-preview-find-selection');
+  await expect(findBtn).toBeVisible();
+  await expect(findBtn).toHaveText('Find selected paper');
+
+  // Verify touch target >= 44px and touch-action: manipulation
+  const findBtnMetrics = await findBtn.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return { height: rect.height, touchAction: getComputedStyle(el).touchAction };
+  });
+  expect(findBtnMetrics.height).toBeGreaterThanOrEqual(44);
+  expect(findBtnMetrics.touchAction).toBe('manipulation');
+
+  // Tap "Find selected paper" -> CitationDialog opens pre-filled with sanitized title (dashes removed) and immediately runs search
+  await findBtn.click();
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#citation-text')).toHaveValue('Transformers for Everyone');
+
+  // Auto-search ran immediately without clicking #search-citation
+  await expect(page.locator('#search-status')).toContainText('Choose the correct paper');
+  await expect(page.locator('.result')).toHaveCount(2);
+  await expect(page.locator('.result').first()).toContainText('Transformers for Everyone');
+
+  // Close CitationDialog and verify main reader scroll position is preserved
+  await page.locator('#close-dialog').click();
+  await expect(page.locator('#citation-dialog')).not.toBeVisible();
+  expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
+});
+

@@ -11,6 +11,7 @@ export function CitationDialog({
   hint,
   initialText,
   label,
+  autoSearch = false,
   onClose,
   onPaperAdded,
   onOpenPaper
@@ -18,34 +19,13 @@ export function CitationDialog({
   const dialogRef = useRef(null);
   const textareaRef = useRef(null);
   const sessionRef = useRef(0);
+  const runSearchRef = useRef(null);
 
   const [text, setText] = useState(initialText || '');
   const [searching, setSearching] = useState(false);
   const [status, setStatus] = useState('');
   const [candidates, setCandidates] = useState([]);
   const [itemStates, setItemStates] = useState({});
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open) {
-      sessionRef.current += 1;
-      setText(initialText || '');
-      setSearching(false);
-      setStatus('');
-      setCandidates([]);
-      setItemStates({});
-      if (!dialog.open && typeof dialog.showModal === 'function') {
-        dialog.showModal();
-      }
-      textareaRef.current?.focus();
-    } else {
-      sessionRef.current += 1;
-      if (dialog.open && typeof dialog.close === 'function') {
-        dialog.close();
-      }
-    }
-  }, [open, initialText, title, hint, label]);
 
   const handleNativeClose = useCallback(() => {
     sessionRef.current += 1;
@@ -96,14 +76,13 @@ export function CitationDialog({
     }
   }, [onPaperAdded]);
 
-  const handleSearch = useCallback(async () => {
-    const session = sessionRef.current;
+  const runSearch = useCallback(async (queryText, session) => {
     setCandidates([]);
     setItemStates({});
     setStatus('Searching OpenAlex…');
     setSearching(true);
     try {
-      const result = await searchCitations(text);
+      const result = await searchCitations(queryText);
       if (session !== sessionRef.current) return;
       if (!result.candidates.length) {
         setStatus('No matches found. Try the full title or DOI.');
@@ -123,7 +102,40 @@ export function CitationDialog({
     } finally {
       if (session === sessionRef.current) setSearching(false);
     }
-  }, [text, handleDownload]);
+  }, [handleDownload]);
+
+  runSearchRef.current = runSearch;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open) {
+      const session = sessionRef.current + 1;
+      sessionRef.current = session;
+      const nextText = initialText || '';
+      setText(nextText);
+      setSearching(false);
+      setStatus('');
+      setCandidates([]);
+      setItemStates({});
+      if (!dialog.open && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      }
+      textareaRef.current?.focus();
+      if (autoSearch && nextText.trim()) {
+        runSearchRef.current?.(nextText, session);
+      }
+    } else {
+      sessionRef.current += 1;
+      if (dialog.open && typeof dialog.close === 'function') {
+        dialog.close();
+      }
+    }
+  }, [open, initialText, title, hint, label, autoSearch]);
+
+  const handleSearch = useCallback(async () => {
+    await runSearch(text, sessionRef.current);
+  }, [text, runSearch]);
 
   return (
     <dialog

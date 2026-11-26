@@ -250,6 +250,7 @@ h2 { font-size: 1.2rem; }
   color: white;
   box-shadow: 0 4px 15px #0005;
   font-weight: 600;
+  touch-action: manipulation;
 }
 .find-selection-btn:active:not(:disabled) {
   background: #254bb5;

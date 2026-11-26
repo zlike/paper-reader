@@ -9,7 +9,8 @@ import {
   extractTitleRange,
   findTargetLineIndex,
   groupItemsIntoLines,
-  highlightLinkTarget
+  highlightLinkTarget,
+  sanitizeTitleForSearch
 } from '../src/lib/link-highlight.js';
 
 function createSpan(text, { left = 0, top = 0, width, height = 12, useRect = true, styleLeft, styleTop, fontSize } = {}) {
@@ -538,11 +539,67 @@ describe('applyHighlightRange, clearTargetHighlights, and highlightLinkTarget', 
   });
 
   it('handles null/empty layers and invalid ranges gracefully', () => {
-    expect(highlightLinkTarget({ targetTextLayer: null, point: { x: 0, y: 0 } }).marks).toEqual([]);
+    expect(highlightLinkTarget({ targetTextLayer: null, point: { x: 0, y: 0 } })).toEqual({
+      marks: [],
+      text: '',
+      entryText: '',
+      matchedTitle: false,
+      searchTitle: ''
+    });
     const emptyLayer = createTextLayer([]);
-    expect(highlightLinkTarget({ targetTextLayer: emptyLayer, point: { x: 0, y: 0 } }).marks).toEqual([]);
+    expect(highlightLinkTarget({ targetTextLayer: emptyLayer, point: { x: 0, y: 0 } })).toEqual({
+      marks: [],
+      text: '',
+      entryText: '',
+      matchedTitle: false,
+      searchTitle: ''
+    });
     expect(applyHighlightRange([], 0, 5)).toEqual([]);
     expect(applyHighlightRange([{ node: document.createTextNode('abc'), start: 0, end: 3, nodeStart: 0 }], 2, 2)).toEqual([]);
     clearTargetHighlights(null);
+  });
+
+  it('returns sanitized searchTitle when highlighted title spans line-wrap dashes', () => {
+    const layer = createTextLayer([
+      createSpan('[1] J. Researcher. Trans—', { left: 40, top: 200, width: 160, height: 12 }),
+      createSpan('formers for Multi–', { left: 56, top: 216, width: 140, height: 12 }),
+      createSpan('agent Systems. NeurIPS, 2024.', { left: 56, top: 232, width: 180, height: 12 })
+    ]);
+
+    const result = highlightLinkTarget({
+      targetTextLayer: layer,
+      point: { x: 40, y: 200 }
+    });
+
+    expect(result.matchedTitle).toBe(true);
+    expect(result.text).toBe('Trans— formers for Multi– agent Systems');
+    expect(result.searchTitle).toBe('Transformers for Multiagent Systems');
+  });
+});
+
+describe('sanitizeTitleForSearch', () => {
+  it('returns empty string for empty, whitespace, or non-string inputs', () => {
+    expect(sanitizeTitleForSearch('')).toBe('');
+    expect(sanitizeTitleForSearch('   \t\n  ')).toBe('');
+    expect(sanitizeTitleForSearch(null)).toBe('');
+    expect(sanitizeTitleForSearch(undefined)).toBe('');
+  });
+
+  it('joins words split across PDF line wraps with hyphens, en-dashes, em-dashes, and soft hyphens', () => {
+    expect(sanitizeTitleForSearch('Trans- formers for Everyone')).toBe('Transformers for Everyone');
+    expect(sanitizeTitleForSearch('Trans-\nformers for Everyone')).toBe('Transformers for Everyone');
+    expect(sanitizeTitleForSearch('Multi– agent Debate')).toBe('Multiagent Debate');
+    expect(sanitizeTitleForSearch('Multi–\nagent Debate')).toBe('Multiagent Debate');
+    expect(sanitizeTitleForSearch('Multi— agent Debate')).toBe('Multiagent Debate');
+    expect(sanitizeTitleForSearch('Multi—\r\n  agent Debate')).toBe('Multiagent Debate');
+    expect(sanitizeTitleForSearch('Collab\u00AD oration in \u00ADModels')).toBe('Collaboration in Models');
+    expect(sanitizeTitleForSearch('a- b- c')).toBe('abc');
+  });
+
+  it('removes inline/spaced en-dashes and em-dashes while preserving normal inline hyphens and collapsing whitespace', () => {
+    expect(sanitizeTitleForSearch('Scaling Laws — A Comprehensive Survey')).toBe('Scaling Laws A Comprehensive Survey');
+    expect(sanitizeTitleForSearch('Encoder–Decoder   Architecture  –  Revisited')).toBe('Encoder Decoder Architecture Revisited');
+    expect(sanitizeTitleForSearch('Large language models are zero-shot reasoners')).toBe('Large language models are zero-shot reasoners');
+    expect(sanitizeTitleForSearch('  State-of-the-Art   Methods - Overview  ')).toBe('State-of-the-Art Methods - Overview');
   });
 });
