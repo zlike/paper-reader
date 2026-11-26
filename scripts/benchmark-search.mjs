@@ -288,6 +288,19 @@ const CASES = [
     query: '[6] Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). Proximal Policy Optimization Algorithms.',
     expectedArxiv: '1707.06347',
     expectedTitle: 'Proximal Policy Optimization Algorithms'
+  },
+  {
+    category: 'bibliography',
+    query: 'Kadavath, S., Conerly, T., Askell, A., Henighan, T., Drain,\nD., Perez, E., Schiefer, N., Dodds, Z. H., DasSarma, N.,\nTran-Johnson, E., et al. Language models (mostly) know\nwhat they know. arXiv preprint arXiv:2207.05221, 2022.',
+    expectedArxiv: '2207.05221',
+    expectedTitle: 'Language Models (Mostly) Know What They Know',
+    expectConfident: true
+  },
+  {
+    category: 'bibliography',
+    query: 'Kadavath, S., Conerly, T., Askell, A., Henighan, T., Drain,\nD., Perez, E., Schiefer, N., Dodds, Z. H., DasSarma, N.,\nTran-Johnson, E., et al. Language models (mostly) know\nwhat they know. arXiv preprint, 2022.',
+    expectedArxiv: '2207.05221',
+    expectedTitle: 'Language Models (Mostly) Know What They Know'
   }
 ];
 

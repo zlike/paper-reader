@@ -11,7 +11,7 @@ const DOI_RE = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i;
 const STRICT_DOI_RE = /^10\.\d{4,9}\/[-._;()/:A-Z0-9]+$/i;
 const MODERN_ARXIV_RE = /^\d{4}\.\d{4,5}(?:v\d+)?$/;
 const LEGACY_ARXIV_RE = /^[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?$/;
-const ARXIV_IN_TEXT_RE = /(?:arxiv(?:\.org\/(?:abs|pdf))?[:/]\s*|10\.48550\/arxiv\.)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)(?:\.pdf)?(?=$|[\s.,;:)\]}>"'])/i;
+const ARXIV_IN_TEXT_RE = /(?:arxiv(?:\.org\/(?:abs|pdf))?[:/]\s*|arxiv\s+preprint\s+(?:arxiv[:/]\s*)?|10\.48550\/arxiv\.)(\d{4}\.\s*\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)(?:\.pdf)?(?=$|[\s.,;:)\]}>"'])/i;
 const BARE_ARXIV_RE = /^\s*\[?\s*(\d{4}\.\d{4,5}(?:v\d+)?)\s*\]?\s*$/;
 const S2_ID_RE = /^[0-9a-f]{40}$/i;
 
@@ -32,7 +32,7 @@ function isValidArxivId(id) {
 
 function normalizeArxivId(raw) {
   if (!raw) return null;
-  const trimmed = raw.trim().replace(/\.pdf$/i, '');
+  const trimmed = raw.replace(/\s+/g, '').replace(/\.pdf$/i, '');
   if (/^\d{4}\.\d{4,5}(?:v\d+)?$/i.test(trimmed)) {
     return trimmed.replace(/V(\d+)$/, 'v$1');
   }
@@ -81,16 +81,27 @@ function extractSubtitlePrefix(text) {
   return { prefix, rest };
 }
 
-function extractBibTitle(text) {
-  const withoutRef = text.replace(/^\s*\[\d+(?:\s*[-,]\s*\d+)*\]\s*/, '').trim();
-  // Match "(YYYY). Title." or "(YYYY) Title"
-  const afterYear = withoutRef.match(/\(\s*(?:19\d{2}|20[0-3]\d)[a-z]?\s*\)\s*[.,:]?\s*(.+)$/);
-  if (!afterYear) return null;
-  const remainder = afterYear[1].trim();
-  // Take up to the first sentence-ending period (ignoring abbreviations like "et al." or single-letter initials)
+function cleanBibSentence(remainder) {
   const firstSentence = remainder.split(/\.(?:\s+|$)/)[0].trim();
   const cleaned = firstSentence.replace(/[^\p{L}\p{N}\s-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 250);
   return cleaned.length >= 5 ? cleaned : null;
+}
+
+function extractBibTitle(text) {
+  const normalized = text.replace(/^\s*\[\d+(?:\s*[-,]\s*\d+)*\]\s*/, '').replace(/\s+/g, ' ').trim();
+  // Pattern 1: "Authors (YYYY). Title. Venue."
+  const afterYear = normalized.match(/\(\s*(?:19\d{2}|20[0-3]\d)[a-z]?\s*\)\s*[.,:]?\s*(.+)$/);
+  if (afterYear) {
+    const title = cleanBibSentence(afterYear[1].trim());
+    if (title) return title;
+  }
+  // Pattern 2: "Authors, et al. Title. Venue, YYYY." (common in ICML/NeurIPS/CVPR)
+  const afterEtAl = normalized.match(/\bet\s+al\.?\s+(.+)$/i);
+  if (afterEtAl) {
+    const title = cleanBibSentence(afterEtAl[1].trim());
+    if (title) return title;
+  }
+  return null;
 }
 
 export function citationQuery(text) {
@@ -558,7 +569,15 @@ async function searchArxiv(searchQuery, fetchImpl, maxResults = 8, fallbackQuery
   }
   if (!response.ok) throw new Error(`arXiv search failed (HTTP ${response.status})`);
   const xml = await response.text();
-  return parseArxivFeed(xml);
+  const entries = parseArxivFeed(xml);
+  if (entries.length === 0 && fallbackQuery) {
+    try {
+      return await searchDataciteArxiv(fallbackQuery.query, fetchImpl, { titlePrefix: fallbackQuery.titlePrefix });
+    } catch {
+      return [];
+    }
+  }
+  return entries;
 }
 
 async function searchCrossref(query, fetchImpl) {
@@ -636,101 +655,157 @@ async function lookupArxivById(arxivId, fetchImpl, timeoutMs = LOOKUP_TIMEOUT_MS
   return entries.find(entry => stripArxivVersion(entry.id) === targetBase) || null;
 }
 
+const PROVIDER_NAMES = {
+  OPENALEX: 'OpenAlex',
+  ARXIV: 'arXiv',
+  CROSSREF: 'Crossref',
+  SEMANTIC_SCHOLAR: 'Semantic Scholar'
+};
+
+function createProviderTracker(ids) {
+  const map = new Map();
+  for (const id of ids) {
+    map.set(id, { id, name: PROVIDER_NAMES[id] || id, status: 'empty', count: 0, _hadSuccess: false, _hadError: false });
+  }
+  return {
+    record(id, settledResult) {
+      if (!map.has(id)) {
+        map.set(id, { id, name: PROVIDER_NAMES[id] || id, status: 'empty', count: 0, _hadSuccess: false, _hadError: false });
+      }
+      const entry = map.get(id);
+      if (settledResult.status === 'fulfilled') {
+        entry._hadSuccess = true;
+        const items = Array.isArray(settledResult.value)
+          ? settledResult.value
+          : settledResult.value ? [settledResult.value] : [];
+        entry.count += items.length;
+      } else {
+        entry._hadError = true;
+      }
+    },
+    toList() {
+      return [...map.values()].map(({ _hadSuccess, _hadError, ...entry }) => ({
+        ...entry,
+        status: entry.count > 0 ? 'ok' : _hadSuccess ? 'empty' : _hadError ? 'error' : 'empty'
+      }));
+    }
+  };
+}
+
 export async function searchCitation(text, fetchImpl = fetch) {
   const parsed = citationQuery(text);
 
   // Fast-path 1: Direct DOI lookup (OpenAlex primary, Crossref + arXiv fallback)
   if (parsed.doi) {
+    const tracker = createProviderTracker(['OPENALEX']);
     const found = [];
     let openAlexError = null;
     try {
       const oa = await lookupOpenAlexByDoi(parsed.doi, fetchImpl);
+      tracker.record('OPENALEX', { status: 'fulfilled', value: oa });
       if (oa) found.push(oa);
     } catch (error) {
       openAlexError = error;
+      tracker.record('OPENALEX', { status: 'rejected', reason: error });
     }
 
     if (!found.length || !found[0].openAccess) {
-      const fallbacks = [lookupCrossrefByDoi(parsed.doi, fetchImpl)];
-      if (parsed.arxivId) fallbacks.push(lookupArxivById(parsed.arxivId, fetchImpl));
-      const settled = await Promise.allSettled(fallbacks);
-      for (const res of settled) {
+      const fallbackSpecs = [{ provider: 'CROSSREF', promise: lookupCrossrefByDoi(parsed.doi, fetchImpl) }];
+      if (parsed.arxivId) fallbackSpecs.push({ provider: 'ARXIV', promise: lookupArxivById(parsed.arxivId, fetchImpl) });
+      const settled = await Promise.allSettled(fallbackSpecs.map(s => s.promise));
+      settled.forEach((res, idx) => {
+        tracker.record(fallbackSpecs[idx].provider, res);
         if (res.status === 'fulfilled' && res.value) found.push(res.value);
-      }
+      });
       if (!found.length && openAlexError) throw openAlexError;
     }
 
     const candidates = dedupeAndMerge(found).map(stripInternal);
     const exact = candidates.filter(item => item.doi?.toLowerCase() === parsed.doi);
-    return { candidates, confident: exact.length === 1 ? exact[0] : null };
+    return { candidates, confident: exact.length === 1 ? exact[0] : null, providers: tracker.toList() };
   }
 
-  // Fast-path 2: Direct arXiv ID lookup (arXiv Atom API primary, OpenAlex arXiv-DOI fallback on 429/error)
+  // Fast-path 2: Direct arXiv ID lookup (arXiv Atom API + DataCite arXiv DOI in parallel, OpenAlex fallback)
   if (parsed.arxivId) {
+    const tracker = createProviderTracker(['ARXIV']);
     const baseId = stripArxivVersion(parsed.arxivId);
+    const [arxivRes, dataciteRes] = await Promise.allSettled([
+      lookupArxivById(parsed.arxivId, fetchImpl, ENGINE_TIMEOUT_MS),
+      lookupDataciteArxivById(baseId, fetchImpl, ENGINE_TIMEOUT_MS)
+    ]);
+
     let entry = null;
-    let arxivError = null;
-    try {
-      entry = await lookupArxivById(parsed.arxivId, fetchImpl);
-    } catch (error) {
-      arxivError = error;
+    if (arxivRes.status === 'fulfilled' && arxivRes.value) {
+      entry = arxivRes.value;
+    } else if (dataciteRes.status === 'fulfilled' && dataciteRes.value) {
+      entry = dataciteRes.value;
     }
+
     if (!entry) {
-      const fallbacks = [
-        lookupDataciteArxivById(baseId, fetchImpl),
-        lookupOpenAlexByDoi(`10.48550/arxiv.${baseId}`, fetchImpl)
-      ];
-      const settled = await Promise.allSettled(fallbacks);
-      for (const res of settled) {
-        if (res.status === 'fulfilled' && res.value) {
-          const item = res.value;
+      try {
+        const oa = await lookupOpenAlexByDoi(`10.48550/arxiv.${baseId}`, fetchImpl, ENGINE_TIMEOUT_MS);
+        tracker.record('OPENALEX', { status: 'fulfilled', value: oa });
+        if (oa) {
           entry = {
-            ...item,
+            ...oa,
             source: 'ARXIV',
             id: baseId,
             openAccess: true,
-            pdfUrls: [...new Set([`https://arxiv.org/pdf/${baseId}.pdf`, ...item.pdfUrls])].slice(0, 4)
+            pdfUrls: [...new Set([`https://arxiv.org/pdf/${baseId}.pdf`, ...oa.pdfUrls])].slice(0, 4)
           };
-          break;
         }
+      } catch (err) {
+        tracker.record('OPENALEX', { status: 'rejected', reason: err });
       }
     }
-    if (!entry) {
-      if (arxivError) throw arxivError;
-      return { candidates: [], confident: null };
+
+    if (entry) {
+      tracker.record('ARXIV', { status: 'fulfilled', value: entry });
+      const candidate = stripInternal(entry);
+      return { candidates: [candidate], confident: candidate, providers: tracker.toList() };
     }
-    const candidate = stripInternal(entry);
-    return { candidates: [candidate], confident: candidate };
+
+    const arxivError = arxivRes.status === 'rejected' ? arxivRes.reason : null;
+    if (arxivError && dataciteRes.status === 'rejected') throw arxivError;
+    tracker.record('ARXIV', { status: 'fulfilled', value: [] });
+    return { candidates: [], confident: null, providers: tracker.toList() };
   }
 
   // Federated parallel search across OpenAlex, arXiv (with DataCite arXiv fallback), Crossref, and optional Semantic Scholar
   const titleQuery = parsed.bibTitle || parsed.query;
   const isShortTitle = titleQuery.split(/\s+/).filter(Boolean).length <= 3;
-  const engineCalls = [
-    searchOpenAlex(titleQuery, fetchImpl, { titleOnly: true, sortByCitations: isShortTitle }),
-    searchCrossref(parsed.query, fetchImpl)
+  const providerIds = ['OPENALEX', 'ARXIV', 'CROSSREF'];
+  if (process.env.S2_API_KEY) providerIds.push('SEMANTIC_SCHOLAR');
+  const tracker = createProviderTracker(providerIds);
+
+  const engineSpecs = [
+    { provider: 'OPENALEX', promise: searchOpenAlex(titleQuery, fetchImpl, { titleOnly: true, sortByCitations: isShortTitle }) },
+    { provider: 'CROSSREF', promise: searchCrossref(parsed.query, fetchImpl) }
   ];
   if (parsed.bibTitle) {
-    engineCalls.push(searchOpenAlex(parsed.query, fetchImpl));
+    engineSpecs.push({ provider: 'OPENALEX', promise: searchOpenAlex(parsed.query, fetchImpl) });
   }
   const arxivQuery = buildArxivQuery(titleQuery);
   if (arxivQuery) {
-    engineCalls.push(searchArxiv(arxivQuery, fetchImpl, 8, { query: titleQuery }));
+    engineSpecs.push({ provider: 'ARXIV', promise: searchArxiv(arxivQuery, fetchImpl, 8, { query: titleQuery }) });
   }
-  if (process.env.S2_API_KEY) engineCalls.push(searchSemanticScholar(titleQuery, fetchImpl));
+  if (process.env.S2_API_KEY) {
+    engineSpecs.push({ provider: 'SEMANTIC_SCHOLAR', promise: searchSemanticScholar(titleQuery, fetchImpl) });
+  }
 
-  const settled = await Promise.allSettled(engineCalls);
+  const settled = await Promise.allSettled(engineSpecs.map(s => s.promise));
   const pool = [];
   let succeeded = 0;
   let firstError = null;
-  for (const result of settled) {
+  settled.forEach((result, idx) => {
+    tracker.record(engineSpecs[idx].provider, result);
     if (result.status === 'fulfilled') {
       succeeded += 1;
       pool.push(...result.value);
     } else if (!firstError) {
       firstError = result.reason;
     }
-  }
+  });
   if (succeeded === 0 && firstError) {
     throw new Error(`Citation search failed (${firstError.message})`);
   }
@@ -740,27 +815,32 @@ export async function searchCitation(text, fetchImpl = fetch) {
 
   // Broad & subtitle/renamed-preprint fallback when initial queries don't find a strong title match
   if (bestSim < 0.72) {
-    const fallbackCalls = [];
+    const fallbackSpecs = [];
     if (!parsed.bibTitle) {
-      fallbackCalls.push(searchOpenAlex(parsed.query, fetchImpl));
+      fallbackSpecs.push({ provider: 'OPENALEX', promise: searchOpenAlex(parsed.query, fetchImpl) });
     }
     if (parsed.subtitle) {
-      fallbackCalls.push(
-        searchOpenAlex(parsed.subtitle.prefix, fetchImpl, { titleOnly: true, sortByCitations: true })
-      );
+      fallbackSpecs.push({
+        provider: 'OPENALEX',
+        promise: searchOpenAlex(parsed.subtitle.prefix, fetchImpl, { titleOnly: true, sortByCitations: true })
+      });
       const arxivPrefixQuery = buildArxivPrefixQuery(parsed.subtitle);
       if (arxivPrefixQuery) {
-        fallbackCalls.push(searchArxiv(arxivPrefixQuery, fetchImpl, 8, {
-          query: parsed.subtitle.prefix,
-          titlePrefix: parsed.subtitle.prefix
-        }));
+        fallbackSpecs.push({
+          provider: 'ARXIV',
+          promise: searchArxiv(arxivPrefixQuery, fetchImpl, 8, {
+            query: parsed.subtitle.prefix,
+            titlePrefix: parsed.subtitle.prefix
+          })
+        });
       }
     }
-    if (fallbackCalls.length) {
-      const fallbackSettled = await Promise.allSettled(fallbackCalls);
-      for (const result of fallbackSettled) {
+    if (fallbackSpecs.length) {
+      const fallbackSettled = await Promise.allSettled(fallbackSpecs.map(s => s.promise));
+      fallbackSettled.forEach((result, idx) => {
+        tracker.record(fallbackSpecs[idx].provider, result);
         if (result.status === 'fulfilled') pool.push(...result.value);
-      }
+      });
       merged = dedupeAndMerge(pool);
     }
   }
@@ -771,7 +851,7 @@ export async function searchCitation(text, fetchImpl = fetch) {
     .slice(0, 8)
     .map(({ item }) => stripInternal(item));
 
-  return { candidates: ranked, confident: null };
+  return { candidates: ranked, confident: null, providers: tracker.toList() };
 }
 
 export async function getCandidate(source, id, fetchImpl = fetch) {

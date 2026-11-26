@@ -284,6 +284,80 @@ test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async
   assert.equal(result.candidates[0].source, 'ARXIV');
   assert.equal(result.candidates[0].id, '2103.00020');
   assert.deepEqual(result.candidates[0].pdfUrls, ['https://arxiv.org/pdf/2103.00020.pdf']);
+  assert.ok(Array.isArray(result.providers));
+  assert.equal(result.providers.find(p => p.id === 'ARXIV')?.status, 'ok');
+  assert.equal(result.providers.find(p => p.id === 'OPENALEX')?.status, 'error');
+});
+
+test('multi-line Kadavath et al. citation resolves with arXiv ID, wrapped arXiv ID, and without arXiv ID', async () => {
+  const exactKadavath =
+    'Kadavath, S., Conerly, T., Askell, A., Henighan, T., Drain,\n' +
+    'D., Perez, E., Schiefer, N., Dodds, Z. H., DasSarma, N.,\n' +
+    'Tran-Johnson, E., et al. Language models (mostly) know\n' +
+    'what they know. arXiv preprint arXiv:2207.05221, 2022.';
+
+  const wrappedKadavath =
+    'Kadavath, S., Conerly, T., Askell, A., et al. Language models (mostly) know\n' +
+    'what they know. arXiv preprint arXiv:2207.\n05221, 2022.';
+
+  const noArxivKadavath =
+    'Kadavath, S., Conerly, T., Askell, A., Henighan, T., Drain,\n' +
+    'D., Perez, E., Schiefer, N., Dodds, Z. H., DasSarma, N.,\n' +
+    'Tran-Johnson, E., et al. Language models (mostly) know\n' +
+    'what they know. arXiv preprint, 2022.';
+
+  assert.equal(citationQuery(exactKadavath).arxivId, '2207.05221');
+  assert.equal(citationQuery(wrappedKadavath).arxivId, '2207.05221');
+  assert.equal(citationQuery(noArxivKadavath).bibTitle, 'Language models mostly know what they know');
+
+  const fetchImpl = async url => {
+    if (url.includes('export.arxiv.org/api/query?id_list=2207.05221')) {
+      return xmlResponse(arxivFeed([{
+        id: '2207.05221v4',
+        title: 'Language Models (Mostly) Know What They Know',
+        authors: ['Saurav Kadavath', 'Tom Conerly', 'Amanda Askell'],
+        year: 2022
+      }]));
+    }
+    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
+    if (url.includes('api.datacite.org/dois/10.48550/arxiv.2207.05221')) {
+      return jsonResponse({
+        data: {
+          id: '10.48550/arxiv.2207.05221',
+          attributes: {
+            titles: [{ title: 'Language Models (Mostly) Know What They Know' }],
+            creators: [{ givenName: 'Saurav', familyName: 'Kadavath' }],
+            publicationYear: 2022
+          }
+        }
+      });
+    }
+    if (url.includes('api.datacite.org/dois?')) {
+      return jsonResponse({
+        data: [{
+          id: '10.48550/arxiv.2207.05221',
+          attributes: {
+            titles: [{ title: 'Language Models (Mostly) Know What They Know' }],
+            creators: [{ givenName: 'Saurav', familyName: 'Kadavath' }],
+            publicationYear: 2022
+          }
+        }]
+      });
+    }
+    if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
+    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const exactRes = await searchCitation(exactKadavath, fetchImpl);
+  assert.equal(exactRes.confident?.id, '2207.05221');
+  assert.equal(exactRes.candidates[0].title, 'Language Models (Mostly) Know What They Know');
+  assert.equal(exactRes.providers.find(p => p.id === 'ARXIV')?.status, 'ok');
+
+  const noIdRes = await searchCitation(noArxivKadavath, fetchImpl);
+  assert.equal(noIdRes.candidates[0]?.id, '2207.05221');
+  assert.equal(noIdRes.candidates[0]?.title, 'Language Models (Mostly) Know What They Know');
+  assert.equal(noIdRes.providers.find(p => p.id === 'ARXIV')?.status, 'ok');
 });
 
 test('getCandidate validates and securely re-resolves every supported source', async () => {

@@ -5,6 +5,19 @@ function candidateKey(candidate) {
   return `${candidate.source}:${candidate.id}`;
 }
 
+const DEFAULT_PROVIDERS = [
+  { id: 'OPENALEX', name: 'OpenAlex' },
+  { id: 'ARXIV', name: 'arXiv' },
+  { id: 'CROSSREF', name: 'Crossref' }
+];
+
+const SOURCE_LABELS = {
+  OPENALEX: 'OpenAlex',
+  ARXIV: 'arXiv',
+  CROSSREF: 'Crossref',
+  SEMANTIC_SCHOLAR: 'Semantic Scholar'
+};
+
 export function CitationDialog({
   open,
   title,
@@ -24,6 +37,7 @@ export function CitationDialog({
   const [text, setText] = useState(initialText || '');
   const [searching, setSearching] = useState(false);
   const [status, setStatus] = useState('');
+  const [providers, setProviders] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [itemStates, setItemStates] = useState({});
 
@@ -78,12 +92,14 @@ export function CitationDialog({
 
   const runSearch = useCallback(async (queryText, session) => {
     setCandidates([]);
+    setProviders([]);
     setItemStates({});
     setStatus('Searching papers…');
     setSearching(true);
     try {
       const result = await searchCitations(queryText);
       if (session !== sessionRef.current) return;
+      if (Array.isArray(result.providers)) setProviders(result.providers);
       if (!result.candidates.length) {
         setStatus('No matches found. Try the full title or DOI.');
         return;
@@ -116,6 +132,7 @@ export function CitationDialog({
       setText(nextText);
       setSearching(false);
       setStatus('');
+      setProviders([]);
       setCandidates([]);
       setItemStates({});
       if (!dialog.open && typeof dialog.showModal === 'function') {
@@ -176,11 +193,35 @@ export function CitationDialog({
         Search
       </button>
       <div id="search-status" role="status">{status}</div>
+      {(searching || providers.length > 0) && (
+        <div className="provider-indicators" aria-label="Search providers">
+          {(searching ? DEFAULT_PROVIDERS : providers).map(provider => {
+            const stateClass = searching
+              ? 'is-searching'
+              : provider.status === 'ok'
+                ? 'is-ok'
+                : provider.status === 'error'
+                  ? 'is-error'
+                  : 'is-empty';
+            return (
+              <span key={provider.id} className={`provider-pill ${stateClass}`}>
+                <span className="provider-dot" aria-hidden="true" />
+                <span>{provider.name}</span>
+                {!searching && provider.status === 'ok' && (
+                  <span className="provider-count">{provider.count}</span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
       <div id="results">
         {candidates.map(candidate => {
           const key = candidateKey(candidate);
           const itemState = itemStates[key];
+          const sourceLabel = SOURCE_LABELS[candidate.source];
           const details = [
+            sourceLabel,
             candidate.authors,
             candidate.year,
             candidate.doi && `DOI: ${candidate.doi}`

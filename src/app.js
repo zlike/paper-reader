@@ -107,7 +107,8 @@ export function createApp(storage, services = {}) {
     const publicCandidate = ({ pdfUrls, ...candidate }) => ({ ...candidate, hasPdf: pdfUrls.length > 0 });
     res.json({
       candidates: result.candidates.map(publicCandidate),
-      confident: result.confident ? publicCandidate(result.confident) : null
+      confident: result.confident ? publicCandidate(result.confident) : null,
+      providers: Array.isArray(result.providers) ? result.providers : []
     });
   }));
   app.post('/api/citations/download', wrap(async (req, res) => {
