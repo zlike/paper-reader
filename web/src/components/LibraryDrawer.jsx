@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { categorizePapers, formatPaperTimestamp } from '../lib/reading-progress.js';
 import { useSwipeToClose } from '../hooks/useSwipeToClose.js';
 
@@ -11,10 +11,17 @@ export function LibraryDrawer({
   statusMessage,
   onClose,
   onSelectPaper,
+  onDeletePaper,
   onAddPaper
 }) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) {
+      setConfirmDeleteId(null);
+      return undefined;
+    }
     const handleKeyDown = event => {
       if (event.key === 'Escape' && !dialogOpen) {
         onClose();
@@ -36,6 +43,17 @@ export function LibraryDrawer({
       { key: 'read', heading: 'Read', emptyText: 'No read papers yet.', items: read }
     ];
   }, [papers, positions]);
+
+  const handleConfirmDelete = async id => {
+    if (!onDeletePaper || deletingId) return;
+    setDeletingId(id);
+    try {
+      await onDeletePaper(id);
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  };
 
   const now = new Date();
   const asideStyle = isSwiping ? { transform: `translateX(${offsetX}px)` } : undefined;
@@ -77,18 +95,56 @@ export function LibraryDrawer({
                 {!section.items.length ? (
                   <p className="paper-section-empty">{section.emptyText}</p>
                 ) : (
-                  section.items.map(({ paper, timestamp }) => (
-                    <button
-                      key={paper.id}
-                      type="button"
-                      className={`paper${paper.id === currentId ? ' active' : ''}`}
-                      title={paper.title}
-                      onClick={() => onSelectPaper(paper.id)}
-                    >
-                      <span className="paper-title">{paper.title}</span>
-                      <span className="paper-time">{formatPaperTimestamp(timestamp, now)}</span>
-                    </button>
-                  ))
+                  section.items.map(({ paper, timestamp }) => {
+                    const isConfirming = confirmDeleteId === paper.id;
+                    const isDeleting = deletingId === paper.id;
+                    return (
+                      <div key={paper.id} className="paper-row">
+                        <button
+                          type="button"
+                          className={`paper${paper.id === currentId ? ' active' : ''}`}
+                          title={paper.title}
+                          onClick={() => onSelectPaper(paper.id)}
+                        >
+                          <span className="paper-title">{paper.title}</span>
+                          <span className="paper-time">{formatPaperTimestamp(timestamp, now)}</span>
+                        </button>
+                        {onDeletePaper && (
+                          isConfirming ? (
+                            <div className="paper-delete-actions" role="group" aria-label={`Confirm delete ${paper.title}`}>
+                              <button
+                                type="button"
+                                className="paper-delete-confirm"
+                                disabled={isDeleting}
+                                onClick={() => handleConfirmDelete(paper.id)}
+                              >
+                                {isDeleting ? 'Deleting…' : 'Delete'}
+                              </button>
+                              <button
+                                type="button"
+                                className="paper-delete-cancel"
+                                disabled={isDeleting}
+                                onClick={() => setConfirmDeleteId(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="paper-delete"
+                              aria-label={`Delete ${paper.title}`}
+                              title="Delete paper"
+                              disabled={Boolean(deletingId)}
+                              onClick={() => setConfirmDeleteId(paper.id)}
+                            >
+                              ✕
+                            </button>
+                          )
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             ))

@@ -994,6 +994,50 @@ test('LinkPreviewDialog preserves compound hyphen across line wraps for Self-Fee
   await expect(page.locator('#citation-text')).toHaveValue('Self-Refine: Iterative Refinement with Self-Feedback');
 });
 
+test('prevents duplicate downloads by showing Open existing paper and supports manual paper deletion with confirmation', async ({ page }) => {
+  await page.goto(server.baseUrl);
+  await expect(page.locator('#library')).toHaveClass(/open/);
+
+  // 1. Download Exact DOI Match Paper via CitationDialog
+  await page.locator('#add-paper').click();
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await page.locator('#citation-text').fill('10.1234/exact');
+  await page.locator('#search-citation').click();
+  await expect(page.locator('#search-status')).toContainText('Exact match found.');
+  await page.locator('.result').first().getByRole('button', { name: 'Download PDF' }).click();
+  await expect(page.locator('#search-status')).toContainText('PDF added to your library.');
+  await page.locator('.result').first().getByRole('button', { name: 'Open paper' }).click();
+  await expect(page.locator('#current-title')).toHaveText('Exact DOI Match Paper');
+
+  // 2. Re-searching the exact same DOI shows "This paper is already in your library." and "Open existing paper" without creating a duplicate
+  await page.locator('#library-toggle').click();
+  await expect(page.locator('.paper')).toHaveCount(1);
+  await page.locator('#add-paper').click();
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await page.locator('#citation-text').fill('10.1234/exact');
+  await page.locator('#search-citation').click();
+  await expect(page.locator('#search-status')).toContainText('This paper is already in your library.');
+  await expect(page.locator('.result').first().getByRole('button', { name: 'Open existing paper' })).toBeVisible();
+  await page.locator('.result').first().getByRole('button', { name: 'Open existing paper' }).click();
+  await expect(page.locator('#citation-dialog')).not.toBeVisible();
+
+  // Verify still only 1 paper in the nav pane
+  await page.locator('#library-toggle').click();
+  await expect(page.locator('.paper')).toHaveCount(1);
+
+  // 3. Manual delete with confirmation: Cancel keeps paper, Delete removes it and clears active viewer
+  await page.getByRole('button', { name: 'Delete Exact DOI Match Paper' }).click();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('.paper')).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Delete Exact DOI Match Paper' }).click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('#library-status')).toContainText('Paper deleted.');
+  await expect(page.locator('#paper-list')).toContainText('No papers yet.');
+  await expect(page).toHaveURL(`${server.baseUrl}/`);
+  await expect(page.locator('#empty')).toBeVisible();
+});
+
 test('reading-pane "Find cited paper" sanitizes line-wrapped selection and auto-triggers citation search (issue #23)', async ({ page }) => {
   await server.uploadPdf(
     'Reading Pane Sanitization Paper',

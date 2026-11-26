@@ -185,6 +185,40 @@ describe('LibraryDrawer', () => {
     fireEvent.touchEnd(aside);
     expect(onClose).toHaveBeenCalledTimes(3);
   });
+
+  it('requires inline confirmation before deleting a paper', async () => {
+    const user = userEvent.setup();
+    const onDeletePaper = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <LibraryDrawer
+        open
+        dialogOpen={false}
+        papers={samplePapers}
+        positions={samplePositions}
+        currentId="r1"
+        statusMessage=""
+        onClose={vi.fn()}
+        onSelectPaper={vi.fn()}
+        onDeletePaper={onDeletePaper}
+        onAddPaper={vi.fn()}
+      />
+    );
+
+    // Tap delete icon -> shows inline Cancel / Delete confirmation
+    await user.click(screen.getByRole('button', { name: 'Delete Unread Paper' }));
+    expect(screen.getByRole('group', { name: 'Confirm delete Unread Paper' })).toBeInTheDocument();
+
+    // Cancel dismisses without calling onDeletePaper
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDeletePaper).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Delete Unread Paper' })).toBeInTheDocument();
+
+    // Confirm triggers onDeletePaper
+    await user.click(screen.getByRole('button', { name: 'Delete Read Paper' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDeletePaper).toHaveBeenCalledWith('r1');
+  });
 });
 
 describe('CitationDialog', () => {
@@ -337,6 +371,92 @@ describe('CitationDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('shows Open existing paper immediately without downloading when existingPaperId is present', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn()
+      // 1. Confident match already in library -> no auto-download
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          confident: { source: 'ARXIV', id: '2305.14325', title: 'Multiagent Debate', hasPdf: true, existingPaperId: 'p-existing-1' },
+          candidates: [{ source: 'ARXIV', id: '2305.14325', title: 'Multiagent Debate', hasPdf: true, existingPaperId: 'p-existing-1' }]
+        })
+      })
+      // 2. Non-confident list with one existing and one new candidate
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          confident: null,
+          candidates: [
+            { source: 'OPENALEX', id: 'W1', title: 'Already Saved Paper', hasPdf: true, existingPaperId: 'p-existing-2' },
+            { source: 'OPENALEX', id: 'W2', title: 'New Paper', hasPdf: true, existingPaperId: null }
+          ]
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onClose = vi.fn();
+    const onOpenPaper = vi.fn();
+    const { rerender } = render(
+      <CitationDialog
+        open
+        title="Find a paper"
+        hint="Hint"
+        initialText="Multiagent Debate"
+        label="Paper title or DOI"
+        onClose={onClose}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={onOpenPaper}
+      />
+    );
+
+    // 1. Confident existing paper does not call /api/citations/download
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('This paper is already in your library.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Open existing paper' }));
+    expect(onOpenPaper).toHaveBeenCalledWith('p-existing-1');
+    expect(onClose).toHaveBeenCalled();
+
+    // 2. Non-confident existing candidate opens directly without downloading
+    rerender(
+      <CitationDialog
+        open={false}
+        title="Find a paper"
+        hint="Hint"
+        initialText="Already Saved Paper"
+        label="Paper title or DOI"
+        onClose={onClose}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={onOpenPaper}
+      />
+    );
+    rerender(
+      <CitationDialog
+        open
+        title="Find a paper"
+        hint="Hint"
+        initialText="Already Saved Paper"
+        label="Paper title or DOI"
+        onClose={onClose}
+        onPaperAdded={vi.fn()}
+        onOpenPaper={onOpenPaper}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Choose the correct paper from these possible matches.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open existing paper' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download PDF' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByRole('button', { name: 'Open existing paper' }));
+    expect(onOpenPaper).toHaveBeenCalledWith('p-existing-2');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('ignores stale search and download responses after dialog closes', async () => {
