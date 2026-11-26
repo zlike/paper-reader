@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { downloadCitation, searchCitations } from '../lib/api.js';
 
 function candidateKey(candidate) {
@@ -104,14 +104,27 @@ export function CitationDialog({
         setStatus('No matches found. Try the full title or DOI.');
         return;
       }
-      setStatus(result.confident
-        ? 'Exact match found.'
-        : 'Choose the correct paper from these possible matches.');
+      const initialStates = {};
+      for (const candidate of result.candidates) {
+        if (candidate.existingPaperId) {
+          initialStates[candidateKey(candidate)] = {
+            status: 'ready',
+            paperId: candidate.existingPaperId,
+            existing: true
+          };
+        }
+      }
+      setItemStates(initialStates);
       setCandidates(result.candidates);
-      if (result.confident?.hasPdf) {
+      if (result.confident?.existingPaperId) {
+        setStatus('This paper is already in your library.');
+      } else if (result.confident?.hasPdf) {
+        setStatus('Exact match found.');
         await handleDownload(result.confident, session);
       } else if (result.confident) {
         setStatus('Exact match found, but no open-access PDF is listed.');
+      } else {
+        setStatus('Choose the correct paper from these possible matches.');
       }
     } catch (error) {
       if (session === sessionRef.current) setStatus(error.message);
@@ -122,7 +135,7 @@ export function CitationDialog({
 
   runSearchRef.current = runSearch;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open) {
@@ -144,6 +157,7 @@ export function CitationDialog({
       }
     } else {
       sessionRef.current += 1;
+      setText('');
       if (dialog.open && typeof dialog.close === 'function') {
         dialog.close();
       }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchPapers } from './lib/api.js';
+import { deletePaper, fetchPapers } from './lib/api.js';
 import { loadPdfjs } from './lib/pdfjs.js';
 import {
   normalizeZoom,
@@ -68,7 +68,8 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     recordLocal,
     sendProgress,
     scheduleSave,
-    flushSave
+    flushSave,
+    cancelPendingSave
   } = useReadingProgress();
 
   const { selectedText, visible: showFindSelection, dismissSelection } = useTextSelection(pagesContainerRef);
@@ -262,6 +263,26 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     });
   }, []);
 
+  const handleDeletePaper = useCallback(async id => {
+    try {
+      await deletePaper(id);
+      if (currentIdRef.current === id) {
+        cancelPendingSave();
+        currentIdRef.current = null;
+        setCurrentId(null);
+        zoomRef.current = 1;
+        setZoom(1);
+        setInitialPosition(null);
+        dismissSelection();
+        syncHistoryPath('/', 'replace', {});
+      }
+      await refreshLibrary();
+      setLibraryStatus('Paper deleted.');
+    } catch (error) {
+      setLibraryStatus(error.message);
+    }
+  }, [cancelPendingSave, dismissSelection, refreshLibrary]);
+
   const handleFindCitation = useCallback((text, { autoSearch = false } = {}) => {
     dismissSelection();
     setDialogState({
@@ -308,6 +329,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
           statusMessage={libraryStatus}
           onClose={handleCloseLibrary}
           onSelectPaper={id => openPaper(id)}
+          onDeletePaper={handleDeletePaper}
           onAddPaper={handleAddPaper}
         />
         <PdfReader

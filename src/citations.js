@@ -465,6 +465,7 @@ function parseSemanticScholarWork(item) {
 
 function stripInternal(candidate) {
   const { _arxivId, _citationCount, _abstract, _score, ...pub } = candidate;
+  if (_arxivId && !pub.arxivId) pub.arxivId = _arxivId;
   return pub;
 }
 
@@ -1060,6 +1061,7 @@ export async function getCandidate(source, id, fetchImpl = fetch) {
     const item = stripInternal(entry);
     item.source = 'ARXIV';
     item.id = id;
+    item.arxivId = baseId;
     item.openAccess = true;
     item.pdfUrls = [`https://arxiv.org/pdf/${id}.pdf`];
     return item;

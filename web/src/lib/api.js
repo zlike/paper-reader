@@ -9,6 +9,12 @@ export function fetchPapers() {
   return apiFetch('/api/papers');
 }
 
+export function deletePaper(paperId) {
+  return apiFetch(`/api/papers/${encodeURIComponent(paperId)}`, {
+    method: 'DELETE'
+  });
+}
+
 export function searchCitations(text) {
   return apiFetch('/api/citations/search', {
     method: 'POST',

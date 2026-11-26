@@ -455,4 +455,76 @@ describe('App integration', () => {
     expect(document.getElementById('citation-dialog')).not.toHaveAttribute('open');
     expect(readerEl.scrollTop).toBe(240);
   });
+
+  it('deletes active and inactive papers from LibraryDrawer, cleans up viewer/URL/localStorage, and handles delete errors', async () => {
+    const user = userEvent.setup();
+    let paperList = [...papers];
+    let positions = {
+      p1: { page: 2, offset: 0.3, zoom: 1.25, last_opened_at: '2026-11-25T10:00:00.000Z', updated_at: '2026-11-25T10:00:00.000Z' }
+    };
+    let failNextDelete = false;
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url, opts) => {
+      if (url === '/api/papers') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            papers: paperList,
+            readingState: { lastPaperId: positions.p1 ? 'p1' : null, positions }
+          })
+        };
+      }
+      if (opts?.method === 'DELETE' && url.startsWith('/api/papers/')) {
+        if (failNextDelete) {
+          failNextDelete = false;
+          return { ok: false, status: 500, json: async () => ({ error: 'Delete failed' }) };
+        }
+        const id = decodeURIComponent(url.split('/').pop());
+        paperList = paperList.filter(p => p.id !== id);
+        const nextPositions = { ...positions };
+        delete nextPositions[id];
+        positions = nextPositions;
+        return { ok: true, status: 200, json: async () => ({ deleted: true, id }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }));
+
+    const { loader } = createPdfjsLoader();
+    render(<App pdfjsLoader={loader} />);
+
+    // Auto-opens p1
+    await waitFor(() => {
+      expect(document.title).toBe('First Paper · Paper Reader');
+    });
+    expect(window.location.pathname).toBe('/papers/p1');
+
+    // Open library and delete inactive paper p2 -> p1 stays open
+    await user.click(screen.getByRole('button', { name: 'Show library' }));
+    await user.click(screen.getByRole('button', { name: 'Delete Second Paper' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      expect(screen.queryByTitle('Second Paper')).not.toBeInTheDocument();
+    });
+    expect(document.title).toBe('First Paper · Paper Reader');
+    expect(screen.getByRole('status')).toHaveTextContent('Paper deleted.');
+
+    // Simulate delete error on p1
+    failNextDelete = true;
+    await user.click(screen.getByRole('button', { name: 'Delete First Paper' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+    expect(screen.getByTitle('First Paper')).toBeInTheDocument();
+
+    // Delete active paper p1 -> viewer clears, URL resets to /, localStorage pruned
+    await user.click(screen.getByRole('button', { name: 'Delete First Paper' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => {
+      expect(document.title).toBe('Paper Reader');
+    });
+    expect(window.location.pathname).toBe('/');
+    expect(screen.getByText('No papers yet.')).toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem('paper-reader:reading-state:v1') || '{}');
+    expect(stored.positions?.p1).toBeUndefined();
+  });
 });

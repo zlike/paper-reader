@@ -87,24 +87,46 @@ export function createApp(storage, services = {}) {
       if (error) next(error);
     });
   });
+  app.delete('/api/papers/:id', wrap(async (req, res) => {
+    const deleted = await storage.delete(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Paper not found' });
+    res.json({ deleted: true, id: req.params.id });
+  }));
   app.post('/api/papers', upload.single('file'), wrap(async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Choose a PDF file' });
     try {
       const title = typeof req.body.title === 'string' && req.body.title.trim()
         ? req.body.title : req.file.originalname.replace(/\.pdf$/i, '');
       const result = await storage.save(req.file.path, { title });
-      res.status(201).json(result);
+      res.status(result.existing ? 200 : 201).json(result);
     } finally {
       await storage.removeTemp(req.file.path);
     }
   }));
+  const candidateLookupKey = (candidate, fallbackSource = null, fallbackId = null) => {
+    const source = candidate?.source || fallbackSource;
+    const id = candidate?.id || fallbackId;
+    const arxivId = candidate?.arxivId || (source === 'ARXIV' ? id : null);
+    return {
+      doi: candidate?.doi || null,
+      title: candidate?.title || null,
+      arxivId
+    };
+  };
   app.post('/api/citations/search', wrap(async (req, res) => {
     if (typeof req.body?.text !== 'string' || !req.body.text.trim() || req.body.text.length > 4000) {
       return res.status(400).json({ error: 'Select citation text up to 4,000 characters' });
     }
     const result = await search(req.body.text);
     // PDF URLs are never accepted from the browser; each download is re-resolved by identifier.
-    const publicCandidate = ({ pdfUrls, ...candidate }) => ({ ...candidate, hasPdf: pdfUrls.length > 0 });
+    const publicCandidate = ({ pdfUrls, ...candidate }) => {
+      const existing = storage.findExisting(candidateLookupKey(candidate));
+      return {
+        ...candidate,
+        hasPdf: pdfUrls.length > 0,
+        existingPaperId: existing ? existing.id : null
+      };
+    };
     res.json({
       candidates: result.candidates.map(publicCandidate),
       confident: result.confident ? publicCandidate(result.confident) : null,
@@ -116,7 +138,8 @@ export function createApp(storage, services = {}) {
       return res.status(400).json({ error: 'A paper identifier is required' });
     }
     const candidate = await lookup(req.body.source, req.body.id);
-    const existing = storage.findDoi(candidate.doi);
+    const lookupKey = candidateLookupKey(candidate, req.body.source, req.body.id);
+    const existing = storage.findExisting(lookupKey);
     if (existing) return res.json({ paper: existing, existing: true });
     if (!candidate.pdfUrls.length) return res.status(404).json({ error: 'No open-access PDF is available for this paper' });
     const temp = path.join(storage.tmpDir, randomUUID());
@@ -134,7 +157,7 @@ export function createApp(storage, services = {}) {
         }
       }
       if (!downloaded) throw new Error(`Could not download an open-access PDF: ${lastError.message}`);
-      const result = await storage.save(temp, candidate);
+      const result = await storage.save(temp, { ...candidate, arxivId: lookupKey.arxivId });
       res.status(result.existing ? 200 : 201).json(result);
     } finally {
       await storage.removeTemp(temp);
