@@ -7,15 +7,18 @@ import {
   useState
 } from 'react';
 import { loadPdfjs } from '../lib/pdfjs.js';
-import { destinationPosition, resolveDestination } from '../lib/pdf-links.js';
+import { destinationPosition } from '../lib/pdf-links.js';
 import { computeReadingPosition, computeScrollTop } from '../lib/reading-progress.js';
 import { PdfPage } from './PdfPage.jsx';
+import { LinkPreviewDialog } from './LinkPreviewDialog.jsx';
 
 export function PdfReader({
   paperId,
   zoom,
   initialPosition,
   onScroll,
+  onFindCitation,
+  onPreviewOpenChange,
   pagesContainerRef,
   readerApiRef,
   pdfjsLoader = loadPdfjs
@@ -28,6 +31,7 @@ export function PdfReader({
   const isRestoringRef = useRef(false);
   const pendingRestoreRef = useRef(null);
   const prevZoomRef = useRef(zoom);
+  const previewRequestIdRef = useRef(0);
 
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pdfjs, setPdfjs] = useState(null);
@@ -37,6 +41,11 @@ export function PdfReader({
   const [layoutKey, setLayoutKey] = useState(0);
   const [openError, setOpenError] = useState('');
   const [readerStatus, setReaderStatus] = useState('');
+  const [linkPreview, setLinkPreview] = useState({
+    open: false,
+    destination: null,
+    requestId: 0
+  });
 
   const getPageMetrics = useCallback(() => {
     const reader = readerRef.current;
@@ -242,25 +251,63 @@ export function PdfReader({
     return () => observer.disconnect();
   }, [pageSlots, layoutKey]);
 
+  // Close link preview whenever paperId changes.
+  useEffect(() => {
+    setLinkPreview({ open: false, destination: null, requestId: 0 });
+  }, [paperId]);
+
+  useEffect(() => {
+    onPreviewOpenChange?.(linkPreview.open);
+  }, [linkPreview.open, onPreviewOpenChange]);
+
   const handleLinkError = useCallback(error => {
     setReaderStatus(`Unable to follow PDF link: ${error.message}`);
   }, []);
 
-  const navigateToDestination = useCallback(async (doc, destination) => {
-    const resolved = await resolveDestination(doc, destination);
-    const page = await doc.getPage(resolved.pageNumber);
+  const openLinkPreview = useCallback(async (doc, destination) => {
     if (pdfDocRef.current !== doc) return;
-    const element = pageElementsRef.current.get(resolved.pageNumber);
-    const reader = readerRef.current;
-    if (!element || !reader) throw new Error('Destination page is unavailable.');
-    const scale = element.clientWidth / page.getViewport({ scale: 1 }).width;
-    const point = destinationPosition(page, page.getViewport({ scale }), resolved.destination);
-    const pageRect = element.getBoundingClientRect();
-    const readerRect = reader.getBoundingClientRect();
     setReaderStatus('');
-    reader.scrollTop += pageRect.top - readerRect.top + point.y;
-    reader.scrollLeft += pageRect.left - readerRect.left + point.x;
+    previewRequestIdRef.current += 1;
+    setLinkPreview({
+      open: true,
+      destination,
+      requestId: previewRequestIdRef.current
+    });
   }, []);
+
+  const handleCloseLinkPreview = useCallback(() => {
+    setLinkPreview(prev => (prev.open ? { ...prev, open: false } : prev));
+  }, []);
+
+  const handlePreviewNavigateInternal = useCallback(nextDestination => {
+    previewRequestIdRef.current += 1;
+    setLinkPreview({
+      open: true,
+      destination: nextDestination,
+      requestId: previewRequestIdRef.current
+    });
+  }, []);
+
+  const jumpToDestination = useCallback(async resolved => {
+    const doc = pdfDocRef.current;
+    if (!doc) return;
+    try {
+      const page = await doc.getPage(resolved.pageNumber);
+      if (pdfDocRef.current !== doc) return;
+      const element = pageElementsRef.current.get(resolved.pageNumber);
+      const reader = readerRef.current;
+      if (!element || !reader) throw new Error('Destination page is unavailable.');
+      const scale = element.clientWidth / page.getViewport({ scale: 1 }).width;
+      const point = destinationPosition(page, page.getViewport({ scale }), resolved.destination);
+      const pageRect = element.getBoundingClientRect();
+      const readerRect = reader.getBoundingClientRect();
+      setReaderStatus('');
+      reader.scrollTop += pageRect.top - readerRect.top + point.y;
+      reader.scrollLeft += pageRect.left - readerRect.left + point.x;
+    } catch (error) {
+      handleLinkError(error);
+    }
+  }, [handleLinkError]);
 
   const handlePagesClick = useCallback(event => {
     if (event.target.closest('.annotationLayer') || !window.getSelection()?.isCollapsed) return;
@@ -315,12 +362,23 @@ export function PdfReader({
             pdfDoc={pdfDoc}
             pdfjs={pdfjs}
             layoutKey={layoutKey}
-            onNavigateDestination={navigateToDestination}
+            onNavigateDestination={openLinkPreview}
             onLinkError={handleLinkError}
             registerElement={registerElement}
           />
         ))}
       </div>
+      <LinkPreviewDialog
+        open={linkPreview.open}
+        pdfDoc={pdfDoc}
+        pdfjs={pdfjs}
+        destination={linkPreview.destination}
+        requestId={linkPreview.requestId}
+        onClose={handleCloseLinkPreview}
+        onJumpToTarget={jumpToDestination}
+        onFindCitation={onFindCitation}
+        onNavigateInternal={handlePreviewNavigateInternal}
+      />
     </main>
   );
 }

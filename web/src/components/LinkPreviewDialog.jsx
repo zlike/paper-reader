@@ -1,0 +1,288 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { computePreviewTarget, resolveDestination } from '../lib/pdf-links.js';
+import { useTextSelection } from '../hooks/useTextSelection.js';
+import { PdfPage } from './PdfPage.jsx';
+
+export function LinkPreviewDialog({
+  open,
+  pdfDoc,
+  pdfjs,
+  destination,
+  requestId,
+  onClose,
+  onJumpToTarget,
+  onFindCitation,
+  onNavigateInternal
+}) {
+  const dialogRef = useRef(null);
+  const bodyRef = useRef(null);
+  const previewPagesRef = useRef(null);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [previewState, setPreviewState] = useState(null);
+
+  const {
+    selectedText,
+    visible: showFindSelection,
+    dismissSelection
+  } = useTextSelection(previewPagesRef);
+
+  const clearModalSelection = useCallback(() => {
+    const selection = window.getSelection?.();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.anchorNode &&
+      dialogRef.current?.contains(selection.anchorNode)
+    ) {
+      selection.removeAllRanges?.();
+    }
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open) {
+      if (!dialog.open && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      }
+    } else {
+      clearModalSelection();
+      dismissSelection();
+      setError('');
+      setPreviewState(null);
+      setLoading(false);
+      if (dialog.open && typeof dialog.close === 'function') {
+        dialog.close();
+      }
+    }
+  }, [open, requestId, dismissSelection, clearModalSelection]);
+
+  useEffect(() => {
+    if (!open || !pdfDoc || destination == null) return undefined;
+
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    setPreviewState(null);
+    dismissSelection();
+
+    (async () => {
+      try {
+        const resolved = await resolveDestination(pdfDoc, destination);
+        if (cancelled) return;
+        const page = await pdfDoc.getPage(resolved.pageNumber);
+        if (cancelled) return;
+
+        const bodyWidth = bodyRef.current?.clientWidth || Math.min(window.innerWidth - 32, 760);
+        const pageWidth = Math.max(220, Math.min(bodyWidth - 24, 860));
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = pageWidth / baseViewport.width;
+        const viewport = page.getViewport({ scale });
+
+        const target = computePreviewTarget(
+          page,
+          viewport,
+          resolved.destination,
+          resolved.pageNumber,
+          pdfDoc.numPages
+        );
+
+        const pages = [
+          {
+            pageNumber: resolved.pageNumber,
+            width: pageWidth,
+            height: viewport.height
+          }
+        ];
+
+        if (target.includeNextPage) {
+          const nextPage = await pdfDoc.getPage(resolved.pageNumber + 1);
+          if (cancelled) return;
+          const nextBase = nextPage.getViewport({ scale: 1 });
+          pages.push({
+            pageNumber: resolved.pageNumber + 1,
+            width: pageWidth,
+            height: pageWidth * (nextBase.height / nextBase.width)
+          });
+        }
+
+        setPreviewState({
+          resolved,
+          pages,
+          scrollTop: target.scrollTop,
+          scrollLeft: target.scrollLeft,
+          requestId
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setError(`Unable to preview link: ${err.message}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, pdfDoc, destination, requestId, dismissSelection]);
+
+  useLayoutEffect(() => {
+    if (!previewState || !bodyRef.current) return;
+    bodyRef.current.scrollTop = previewState.scrollTop;
+    bodyRef.current.scrollLeft = previewState.scrollLeft;
+  }, [previewState]);
+
+  const handleNativeClose = useCallback(() => {
+    clearModalSelection();
+    dismissSelection();
+    onClose();
+  }, [clearModalSelection, dismissSelection, onClose]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    dialog.addEventListener('close', handleNativeClose);
+    return () => dialog.removeEventListener('close', handleNativeClose);
+  }, [handleNativeClose]);
+
+  const closeDialog = useCallback(() => {
+    if (dialogRef.current?.open) {
+      dialogRef.current.close();
+    } else {
+      handleNativeClose();
+    }
+  }, [handleNativeClose]);
+
+  const handleBackdropClick = useCallback(event => {
+    if (event.target === dialogRef.current) {
+      closeDialog();
+    }
+  }, [closeDialog]);
+
+  const handleJumpToPage = useCallback(() => {
+    const resolved = previewState.resolved;
+    closeDialog();
+    onJumpToTarget(resolved);
+  }, [previewState, closeDialog, onJumpToTarget]);
+
+  const handleFindCitedPaper = useCallback(() => {
+    const text = selectedText;
+    clearModalSelection();
+    dismissSelection();
+    onFindCitation?.(text);
+  }, [selectedText, clearModalSelection, dismissSelection, onFindCitation]);
+
+  const handleInternalNavigate = useCallback(async (_doc, nextDestination) => {
+    onNavigateInternal(nextDestination);
+  }, [onNavigateInternal]);
+
+  const handleInternalLinkError = useCallback(err => {
+    setError(`Unable to preview link: ${err.message}`);
+  }, []);
+
+  const handlePreviewPagesClick = useCallback(event => {
+    if (event.target.closest('.annotationLayer') || !window.getSelection()?.isCollapsed) return;
+    const page = event.target.closest('.page');
+    if (!page) return;
+    for (const link of page.querySelectorAll('.linkAnnotation > a')) {
+      const rect = link.getBoundingClientRect();
+      if (
+        event.clientX >= rect.left && event.clientX <= rect.right &&
+        event.clientY >= rect.top && event.clientY <= rect.bottom
+      ) {
+        link.click();
+        break;
+      }
+    }
+  }, []);
+
+  const title = previewState
+    ? (previewState.pages.length > 1
+      ? `Pages ${previewState.pages[0].pageNumber}–${previewState.pages[1].pageNumber}`
+      : `Page ${previewState.pages[0].pageNumber}`)
+    : 'Link preview';
+
+  return (
+    <dialog
+      ref={dialogRef}
+      id="link-preview-dialog"
+      className="link-preview-dialog"
+      aria-labelledby="link-preview-title"
+      onClick={handleBackdropClick}
+    >
+      <div className="link-preview-surface">
+        <div className="link-preview-header">
+          <h2 id="link-preview-title">{title}</h2>
+          <div className="link-preview-actions">
+            {previewState?.resolved && (
+              <button
+                id="link-preview-jump"
+                type="button"
+                className="secondary-btn"
+                onClick={handleJumpToPage}
+              >
+                Jump to page
+              </button>
+            )}
+            <button
+              id="close-link-preview"
+              type="button"
+              className="icon"
+              aria-label="Close link preview"
+              onClick={closeDialog}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <div ref={bodyRef} id="link-preview-body" className="link-preview-body">
+          {loading && (
+            <div id="link-preview-loading" role="status" className="link-preview-message">
+              Loading link target…
+            </div>
+          )}
+          {error && (
+            <div id="link-preview-error" role="alert" className="link-preview-error">
+              {error}
+            </div>
+          )}
+          <div
+            ref={previewPagesRef}
+            id="link-preview-pages"
+            className="link-preview-pages"
+            onClick={handlePreviewPagesClick}
+          >
+            {previewState?.pages.map(slot => (
+              <PdfPage
+                key={`preview-${previewState.requestId}-${slot.pageNumber}`}
+                pageNumber={slot.pageNumber}
+                width={slot.width}
+                height={slot.height}
+                isVisible
+                pdfDoc={pdfDoc}
+                pdfjs={pdfjs}
+                layoutKey={previewState.requestId}
+                onNavigateDestination={handleInternalNavigate}
+                onLinkError={handleInternalLinkError}
+              />
+            ))}
+          </div>
+        </div>
+        <button
+          id="link-preview-find-selection"
+          type="button"
+          className="find-selection-btn link-preview-find-btn"
+          hidden={!showFindSelection}
+          onClick={handleFindCitedPaper}
+        >
+          Find cited paper
+        </button>
+      </div>
+    </dialog>
+  );
+}

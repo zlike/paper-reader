@@ -55,3 +55,24 @@ export function destinationPosition(page, viewport, destination) {
   const point = viewport.convertToViewportPoint(x, y);
   return { x: point[0], y: point[1] };
 }
+
+export const PREVIEW_NEXT_PAGE_THRESHOLD = 0.6;
+const PREVIEW_SCROLL_TOP_MARGIN = 24;
+const PREVIEW_SCROLL_LEFT_MARGIN = 16;
+
+export function computePreviewTarget(page, viewport, destination, pageNumber, numPages) {
+  const raw = destinationPosition(page, viewport, destination);
+  const clampedX = Math.max(0, Math.min(raw.x, viewport.width));
+  const clampedY = Math.max(0, Math.min(raw.y, viewport.height));
+  const includeNextPage =
+    pageNumber < numPages &&
+    viewport.height > 0 &&
+    clampedY / viewport.height >= PREVIEW_NEXT_PAGE_THRESHOLD;
+  return {
+    x: clampedX,
+    y: clampedY,
+    scrollTop: Math.max(0, Math.round(clampedY - PREVIEW_SCROLL_TOP_MARGIN)),
+    scrollLeft: Math.max(0, Math.round(clampedX - PREVIEW_SCROLL_LEFT_MARGIN)),
+    includeNextPage
+  };
+}

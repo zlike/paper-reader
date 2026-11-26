@@ -17,7 +17,7 @@ export function PdfPage({
 
   const setContainerRef = useCallback(node => {
     containerRef.current = node;
-    registerElement(pageNumber, node);
+    registerElement?.(pageNumber, node);
   }, [pageNumber, registerElement]);
 
   useEffect(() => {

@@ -344,4 +344,115 @@ describe('App integration', () => {
     });
     expect(window.location.pathname).toBe('/papers/p3');
   });
+
+  it('opens LinkPreviewDialog on internal link click and hands off Find cited paper to CitationDialog without moving reader', async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, '', '/papers/p1');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ papers, readingState: { lastPaperId: 'p1', positions: {} } })
+    }));
+
+    const doc = {
+      numPages: 3,
+      destroy: vi.fn().mockResolvedValue(undefined),
+      getDestination: async name => (name === 'ref-1' ? [2, { name: 'Fit' }] : null),
+      getPageIndex: async () => 2,
+      getPage: vi.fn().mockImplementation(async pageNumber => ({
+        view: [0, 0, 600, 800],
+        getViewport: ({ scale }) => ({
+          width: 600 * scale,
+          height: 800 * scale,
+          clone: () => ({ width: 600 * scale, height: 800 * scale }),
+          convertToViewportPoint: (x, y) => [x * scale, (800 - y) * scale]
+        }),
+        render: () => ({ promise: Promise.resolve() }),
+        streamTextContent: () => ({}),
+        getAnnotations: async () => (pageNumber === 1 ? [{ subtype: 'Link', dest: 'ref-1' }] : [])
+      }))
+    };
+
+    class TextLayer {
+      constructor({ container }) {
+        this.container = container;
+      }
+      async render() {
+        const span = document.createElement('span');
+        span.textContent = '[1] Cited Reference From Preview';
+        this.container.append(span);
+      }
+    }
+
+    class AnnotationLayer {
+      constructor({ div }) {
+        this.div = div;
+      }
+      async render({ annotations, linkService }) {
+        for (const ann of annotations) {
+          const section = document.createElement('section');
+          section.className = 'linkAnnotation';
+          const a = document.createElement('a');
+          a.href = '#';
+          a.addEventListener('click', e => {
+            e.preventDefault();
+            linkService.goToDestination(ann.dest);
+          });
+          section.append(a);
+          this.div.append(section);
+        }
+      }
+    }
+
+    const loader = vi.fn().mockResolvedValue({
+      getDocument: () => ({ promise: Promise.resolve(doc) }),
+      TextLayer,
+      AnnotationLayer
+    });
+
+    render(<App pdfjsLoader={loader} />);
+
+    const page1 = await screen.findByLabelText('Page 1');
+    await waitFor(() => {
+      expect(page1.querySelector('.linkAnnotation > a')).toBeTruthy();
+    });
+
+    const readerEl = document.getElementById('reader');
+    readerEl.scrollTop = 240;
+
+    // Tap internal link -> opens LinkPreviewDialog on Page 3 without changing reader scrollTop
+    fireEvent.click(page1.querySelector('.linkAnnotation > a'));
+    expect(await screen.findByText('Page 3')).toBeInTheDocument();
+    expect(readerEl.scrollTop).toBe(240);
+
+    // Wait for preview page textLayer to render
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.textLayer span')).toBeTruthy();
+    });
+
+    const previewTextNode = previewPages.querySelector('.textLayer span').firstChild;
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => '[1] Cited Reference From Preview',
+      anchorNode: previewTextNode,
+      isCollapsed: false
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    // Click Find cited paper inside LinkPreviewDialog -> opens CitationDialog pre-filled
+    const previewFindBtn = document.getElementById('link-preview-find-selection');
+    expect(previewFindBtn).not.toHaveAttribute('hidden');
+    await user.click(previewFindBtn);
+
+    expect(screen.getByText('Find a cited paper')).toBeInTheDocument();
+    expect(screen.getByLabelText('Citation text')).toHaveValue('[1] Cited Reference From Preview');
+    expect(readerEl.scrollTop).toBe(240);
+
+    // Closing CitationDialog preserves reader scrollTop
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(document.getElementById('citation-dialog')).not.toHaveAttribute('open');
+    expect(readerEl.scrollTop).toBe(240);
+  });
 });

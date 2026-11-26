@@ -5,6 +5,8 @@ import { createRef } from 'react';
 import { Header } from '../src/components/Header.jsx';
 import { LibraryDrawer } from '../src/components/LibraryDrawer.jsx';
 import { CitationDialog } from '../src/components/CitationDialog.jsx';
+import { LinkPreviewDialog } from '../src/components/LinkPreviewDialog.jsx';
+import { PdfPage } from '../src/components/PdfPage.jsx';
 import { PdfReader } from '../src/components/PdfReader.jsx';
 
 afterEach(() => {
@@ -581,14 +583,31 @@ describe('PdfReader and PdfPage', () => {
     expect(links[1]).toHaveAttribute('aria-label', 'Go to link in this paper');
 
     // Trigger valid internal link + named actions (NextPage valid, PrevPage out of bounds no-op)
+    const readerEl = document.getElementById('reader');
+    readerEl.scrollTop = 150;
     fireEvent.click(links[1]);
+    expect(await screen.findByText('Page 2')).toBeInTheDocument();
+    expect(readerEl.scrollTop).toBe(150);
+
+    // Jump to page scrolls main reader and closes preview dialog
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to page' }));
+    await waitFor(() => {
+      expect(document.getElementById('link-preview-dialog')).not.toHaveAttribute('open');
+    });
+
     fireEvent.click(links[4]);
+    expect(await screen.findByText('Page 2')).toBeInTheDocument();
     fireEvent.click(links[5]);
 
-    // Trigger broken internal link and throwing destination -> shows reader-status error
+    // Trigger broken internal link and throwing destination -> shows error inside preview dialog
     fireEvent.click(links[2]);
+    expect(await screen.findByText(/Unable to preview link/)).toBeInTheDocument();
     fireEvent.click(links[3]);
-    expect(await screen.findByText(/Unable to follow PDF link/)).toBeInTheDocument();
+    expect(await screen.findByText('Unable to preview link: Link failed')).toBeInTheDocument();
+
+    // Close preview dialog
+    fireEvent.click(screen.getByRole('button', { name: 'Close link preview' }));
+    expect(document.getElementById('link-preview-dialog')).not.toHaveAttribute('open');
 
     // Hit-test click on page outside annotationLayer delegates to matching link
     const linkClickSpy = vi.spyOn(links[1], 'click');
@@ -801,5 +820,387 @@ describe('PdfReader and PdfPage', () => {
       />
     );
     expect(screen.getByText('Your papers, in one place.')).toBeInTheDocument();
+  });
+});
+
+describe('LinkPreviewDialog', () => {
+  function createPreviewPdfDoc({ numPages = 4, annotationsByPage = {} } = {}) {
+    const getPage = vi.fn().mockImplementation(async pageNumber => ({
+      view: [0, 0, 600, 800],
+      getViewport: ({ scale }) => ({
+        width: 600 * scale,
+        height: 800 * scale,
+        clone: () => ({ width: 600 * scale, height: 800 * scale }),
+        convertToViewportPoint: (x, y) => [x * scale, (800 - y) * scale],
+        convertToViewportRectangle: ([x1, y1, x2, y2]) => [x1, y1, x2, y2]
+      }),
+      render: () => ({ promise: Promise.resolve() }),
+      streamTextContent: () => ({}),
+      getAnnotations: async () => annotationsByPage[pageNumber] || []
+    }));
+
+    const doc = {
+      numPages,
+      getPage,
+      getDestination: async name => {
+        if (name === 'bottom-p2') return [1, { name: 'XYZ' }, 72, 160, null];
+        if (name === 'top-p3') return [2, { name: 'Fit' }];
+        if (name === 'broken') return null;
+        return null;
+      },
+      getPageIndex: async () => 1
+    };
+
+    class TextLayer {
+      constructor({ container }) {
+        this.container = container;
+      }
+      async render() {
+        const span = document.createElement('span');
+        span.textContent = 'Reference [1] Vaswani et al., Attention Is All You Need';
+        this.container.append(span);
+      }
+    }
+
+    class AnnotationLayer {
+      constructor({ div }) {
+        this.div = div;
+      }
+      async render({ annotations, linkService }) {
+        for (const ann of annotations) {
+          const section = document.createElement('section');
+          section.className = 'linkAnnotation';
+          const a = document.createElement('a');
+          if (ann.url) {
+            linkService.addLinkAttributes(a, ann.url);
+          } else if (ann.dest) {
+            a.href = linkService.getDestinationHash();
+            a.addEventListener('click', e => {
+              e.preventDefault();
+              linkService.goToDestination(ann.dest);
+            });
+          }
+          section.append(a);
+          this.div.append(section);
+        }
+      }
+    }
+
+    return { doc, pdfjs: { TextLayer, AnnotationLayer } };
+  }
+
+  it('renders target + adjacent next page when near bottom, scrolls to target, supports selection & Find cited paper, internal links, and backdrop dismiss', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({
+      numPages: 4,
+      annotationsByPage: {
+        2: [{ subtype: 'Link', dest: 'top-p3' }]
+      }
+    });
+
+    const onClose = vi.fn();
+    const onJumpToTarget = vi.fn();
+    const onFindCitation = vi.fn();
+    const onNavigateInternal = vi.fn();
+
+    render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="bottom-p2"
+        requestId={1}
+        onClose={onClose}
+        onJumpToTarget={onJumpToTarget}
+        onFindCitation={onFindCitation}
+        onNavigateInternal={onNavigateInternal}
+      />
+    );
+
+    // Adjacent page included -> title shows Pages 2–3
+    expect(await screen.findByText('Pages 2–3')).toBeInTheDocument();
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelectorAll('.page')).toHaveLength(2);
+      expect(previewPages.querySelector('.page[data-page="2"]').dataset.rendered).toBe('true');
+    });
+
+    // Body auto-scrolled to target near bottom of page 2
+    expect(document.getElementById('link-preview-body').scrollTop).toBeGreaterThan(0);
+
+    // Selecting text inside preview textLayer shows Find cited paper button inside modal
+    const textNode = previewPages.querySelector('.page[data-page="2"] .textLayer span').firstChild;
+    const removeAllRanges = vi.fn();
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => 'Attention Is All You Need',
+      anchorNode: textNode,
+      isCollapsed: false,
+      removeAllRanges
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const findBtn = document.getElementById('link-preview-find-selection');
+    expect(findBtn).not.toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(removeAllRanges).toHaveBeenCalledTimes(1);
+    expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need');
+    expect(findBtn).toHaveAttribute('hidden');
+
+    // Hit-test click on internal link inside preview triggers onNavigateInternal
+    const previewPage2 = previewPages.querySelector('.page[data-page="2"]');
+    const internalLink = previewPage2.querySelector('.linkAnnotation > a');
+    vi.spyOn(internalLink, 'getBoundingClientRect').mockReturnValue({ left: 10, right: 80, top: 10, bottom: 40 });
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+    // Click outside link rect is a no-op
+    fireEvent.click(previewPage2, { clientX: 200, clientY: 200 });
+    expect(onNavigateInternal).not.toHaveBeenCalled();
+    // Click outside any .page is a no-op
+    fireEvent.click(previewPages, { clientX: 30, clientY: 20 });
+    expect(onNavigateInternal).not.toHaveBeenCalled();
+    // Click inside link rect triggers navigation
+    fireEvent.click(previewPage2, { clientX: 30, clientY: 20 });
+    expect(onNavigateInternal).toHaveBeenCalledWith('top-p3');
+    // Click when selection is NOT collapsed is ignored
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: false });
+    fireEvent.click(previewPage2, { clientX: 30, clientY: 20 });
+    expect(onNavigateInternal).toHaveBeenCalledTimes(1);
+
+    // Clicking inside surface does NOT close; clicking dialog backdrop DOES close
+    fireEvent.click(document.querySelector('.link-preview-surface'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(document.getElementById('link-preview-dialog'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles Jump to page, error state, internal link error, and cancellation on close mid-load', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({
+      numPages: 3,
+      annotationsByPage: {
+        3: [{ subtype: 'Link', dest: 'top-p3' }]
+      }
+    });
+    const onClose = vi.fn();
+    const onJumpToTarget = vi.fn();
+    const failingInternalNav = vi.fn().mockImplementation(() => {
+      throw new Error('Internal nav failed');
+    });
+
+    const { rerender } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={1}
+        onClose={onClose}
+        onJumpToTarget={onJumpToTarget}
+        onNavigateInternal={failingInternalNav}
+      />
+    );
+
+    expect(await screen.findByText('Page 3')).toBeInTheDocument();
+    // Trigger internal link error inside preview dialog
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.linkAnnotation > a')).toBeTruthy();
+    });
+    fireEvent.click(previewPages.querySelector('.linkAnnotation > a'));
+    expect(await screen.findByText('Unable to preview link: Internal nav failed')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to page' }));
+    expect(onJumpToTarget).toHaveBeenCalledWith({ pageNumber: 3, destination: [2, { name: 'Fit' }] });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Closing via prop while dialog is open calls dialog.close() and resets cleanly
+    const { rerender: rerenderClose } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={2}
+        onClose={onClose}
+        onJumpToTarget={onJumpToTarget}
+      />
+    );
+    expect(await screen.findByText('Page 3')).toBeInTheDocument();
+    rerenderClose(
+      <LinkPreviewDialog
+        open={false}
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={2}
+        onClose={onClose}
+        onJumpToTarget={onJumpToTarget}
+      />
+    );
+    expect(document.querySelectorAll('#link-preview-dialog')[1]).not.toHaveAttribute('open');
+
+    // Broken destination shows error and hides Jump to page
+    rerender(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="broken"
+        requestId={3}
+        onClose={onClose}
+        onJumpToTarget={onJumpToTarget}
+      />
+    );
+    expect(await screen.findByText(/Unable to preview link/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Jump to page' })).not.toBeInTheDocument();
+
+    // Cancellation while resolveDestination is pending and while getPage is pending
+    let resolvePending;
+    const slowDoc = {
+      ...doc,
+      getDestination: () => new Promise(resolve => { resolvePending = resolve; })
+    };
+    const { unmount } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={slowDoc}
+        pdfjs={pdfjs}
+        destination="slow"
+        requestId={4}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Loading link target…')).toBeInTheDocument();
+    unmount();
+    await act(async () => {
+      resolvePending([0, { name: 'Fit' }]);
+    });
+
+    let resolvePage;
+    const slowPageDoc = {
+      ...doc,
+      getDestination: async () => [0, { name: 'Fit' }],
+      getPage: () => new Promise(resolve => { resolvePage = resolve; })
+    };
+    const { unmount: unmount2 } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={slowPageDoc}
+        pdfjs={pdfjs}
+        destination="slow-page"
+        requestId={5}
+        onClose={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(resolvePage).toBeTypeOf('function'));
+    unmount2();
+    await act(async () => {
+      resolvePage(await doc.getPage(1));
+    });
+  });
+
+  it('updates preview when tapping an internal link inside LinkPreviewDialog hosted by PdfReader and handles jump errors', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({
+      numPages: 3,
+      annotationsByPage: {
+        1: [{ subtype: 'Link', dest: 'bottom-p2' }],
+        2: [{ subtype: 'Link', dest: 'top-p3' }]
+      }
+    });
+    doc.destroy = vi.fn().mockResolvedValue(undefined);
+    const loader = vi.fn().mockResolvedValue({
+      getDocument: () => ({ promise: Promise.resolve(doc) }),
+      TextLayer: pdfjs.TextLayer,
+      AnnotationLayer: pdfjs.AnnotationLayer
+    });
+
+    render(
+      <PdfReader
+        paperId="nested-links"
+        zoom={1}
+        initialPosition={{ page: 1, offset: 0 }}
+        onScroll={vi.fn()}
+        pagesContainerRef={createRef()}
+        readerApiRef={createRef()}
+        pdfjsLoader={loader}
+      />
+    );
+
+    const page1 = await screen.findByLabelText('Page 1');
+    await waitFor(() => {
+      expect(page1.querySelector('.linkAnnotation > a')).toBeTruthy();
+    });
+
+    // Click link on page 1 -> opens preview on Pages 2–3
+    fireEvent.click(page1.querySelector('.linkAnnotation > a'));
+    expect(await screen.findByText('Pages 2–3')).toBeInTheDocument();
+
+    // Click internal link inside preview page 2 -> updates preview to Page 3
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.page[data-page="2"] .linkAnnotation > a')).toBeTruthy();
+    });
+    fireEvent.click(previewPages.querySelector('.page[data-page="2"] .linkAnnotation > a'));
+    expect(await screen.findByText('Page 3')).toBeInTheDocument();
+
+    // Force getPage failure during Jump to page -> displays reader status error
+    doc.getPage.mockRejectedValueOnce(new Error('Jump failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to page' }));
+    expect(await screen.findByText('Unable to follow PDF link: Jump failed')).toBeInTheDocument();
+  });
+
+  it('reports named-action navigation errors from PdfPage', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({
+      numPages: 2,
+      annotationsByPage: {
+        1: [{ subtype: 'Link', action: 'NextPage' }]
+      }
+    });
+    class NamedActionAnnotationLayer {
+      constructor({ div }) {
+        this.div = div;
+      }
+      async render({ annotations, linkService }) {
+        for (const ann of annotations) {
+          const section = document.createElement('section');
+          section.className = 'linkAnnotation';
+          const a = document.createElement('a');
+          a.href = linkService.getAnchorUrl();
+          a.addEventListener('click', e => {
+            e.preventDefault();
+            linkService.executeNamedAction(ann.action);
+          });
+          section.append(a);
+          this.div.append(section);
+        }
+      }
+    }
+    const onLinkError = vi.fn();
+    render(
+      <PdfPage
+        pageNumber={1}
+        width={600}
+        height={800}
+        isVisible
+        pdfDoc={doc}
+        pdfjs={{ TextLayer: pdfjs.TextLayer, AnnotationLayer: NamedActionAnnotationLayer }}
+        layoutKey={1}
+        onNavigateDestination={() => Promise.reject(new Error('Action failed'))}
+        onLinkError={onLinkError}
+      />
+    );
+    const page1 = await screen.findByLabelText('Page 1');
+    await waitFor(() => {
+      expect(page1.querySelector('.linkAnnotation > a')).toBeTruthy();
+    });
+    fireEvent.click(page1.querySelector('.linkAnnotation > a'));
+    await waitFor(() => {
+      expect(onLinkError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Action failed' }));
+    });
   });
 });
