@@ -1203,4 +1203,66 @@ describe('LinkPreviewDialog', () => {
       expect(onLinkError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Action failed' }));
     });
   });
+
+  it('highlights the cited paper title after textLayer renders and re-highlights cleanly on internal navigation', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({ numPages: 3 });
+
+    const { rerender } = render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="bottom-p2"
+        requestId={10}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={vi.fn()}
+        onNavigateInternal={vi.fn()}
+      />
+    );
+
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      const marks = previewPages.querySelectorAll('.page[data-page="2"] mark.link-target-highlight');
+      expect(marks.length).toBeGreaterThan(0);
+      expect(Array.from(marks).map(m => m.textContent).join('')).toBe('Attention Is All You Need');
+    });
+
+    // Re-navigating to another destination cleanly replaces highlights
+    rerender(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={11}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={vi.fn()}
+        onNavigateInternal={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(previewPages.querySelector('.page[data-page="2"]')).toBeNull();
+      const marks = previewPages.querySelectorAll('.page[data-page="3"] mark.link-target-highlight');
+      expect(marks.length).toBeGreaterThan(0);
+      expect(Array.from(marks).map(m => m.textContent).join('')).toBe('Attention Is All You Need');
+    });
+
+    // Closing cleans up highlights
+    rerender(
+      <LinkPreviewDialog
+        open={false}
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={11}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+      />
+    );
+    expect(previewPages.querySelectorAll('mark.link-target-highlight')).toHaveLength(0);
+  });
 });

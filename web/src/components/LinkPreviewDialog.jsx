@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { computePreviewTarget, resolveDestination } from '../lib/pdf-links.js';
+import { clearTargetHighlights, highlightLinkTarget } from '../lib/link-highlight.js';
 import { useTextSelection } from '../hooks/useTextSelection.js';
 import { PdfPage } from './PdfPage.jsx';
 
@@ -17,6 +18,7 @@ export function LinkPreviewDialog({
   const dialogRef = useRef(null);
   const bodyRef = useRef(null);
   const previewPagesRef = useRef(null);
+  const renderedPagesRef = useRef(new Map());
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -48,6 +50,8 @@ export function LinkPreviewDialog({
         dialog.showModal();
       }
     } else {
+      clearTargetHighlights(previewPagesRef.current);
+      renderedPagesRef.current.clear();
       clearModalSelection();
       dismissSelection();
       setError('');
@@ -63,6 +67,8 @@ export function LinkPreviewDialog({
     if (!open || !pdfDoc || destination == null) return undefined;
 
     let cancelled = false;
+    clearTargetHighlights(previewPagesRef.current);
+    renderedPagesRef.current.clear();
     setLoading(true);
     setError('');
     setPreviewState(null);
@@ -111,6 +117,7 @@ export function LinkPreviewDialog({
         setPreviewState({
           resolved,
           pages,
+          targetPoint: { x: target.x, y: target.y },
           scrollTop: target.scrollTop,
           scrollLeft: target.scrollLeft,
           requestId
@@ -137,7 +144,28 @@ export function LinkPreviewDialog({
     bodyRef.current.scrollLeft = previewState.scrollLeft;
   }, [previewState]);
 
+  const handlePageRendered = useCallback((pageNumber, element) => {
+    if (!previewState) return;
+    renderedPagesRef.current.set(pageNumber, element);
+
+    const targetSlot = previewState.pages[0];
+    const targetTextLayer = renderedPagesRef.current.get(targetSlot.pageNumber)?.querySelector('.textLayer');
+    if (!targetTextLayer) return;
+
+    const nextSlot = previewState.pages[1];
+    const nextTextLayer = nextSlot
+      ? renderedPagesRef.current.get(nextSlot.pageNumber)?.querySelector('.textLayer') || null
+      : null;
+
+    highlightLinkTarget({
+      targetTextLayer,
+      nextTextLayer,
+      point: previewState.targetPoint
+    });
+  }, [previewState]);
+
   const handleNativeClose = useCallback(() => {
+    if (dialogRef.current?.open) return;
     clearModalSelection();
     dismissSelection();
     onClose();
@@ -269,6 +297,7 @@ export function LinkPreviewDialog({
                 layoutKey={previewState.requestId}
                 onNavigateDestination={handleInternalNavigate}
                 onLinkError={handleInternalLinkError}
+                onRendered={handlePageRendered}
               />
             ))}
           </div>
