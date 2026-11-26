@@ -828,6 +828,69 @@ describe('PdfReader and PdfPage', () => {
     );
     expect(screen.getByText('Your papers, in one place.')).toBeInTheDocument();
   });
+
+  it('commits pinch-to-zoom on #reader and anchors scroll position around the focal point', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { loader } = createMockPdfjs({ numPages: 2 });
+    const onZoomChange = vi.fn();
+
+    const { rerender } = render(
+      <PdfReader
+        paperId="p-pinch"
+        zoom={1}
+        initialPosition={{ page: 1, offset: 0 }}
+        onScroll={vi.fn()}
+        onZoomChange={onZoomChange}
+        readerApiRef={createRef()}
+        pdfjsLoader={loader}
+      />
+    );
+
+    const page1 = await screen.findByLabelText('Page 1');
+    const readerEl = document.getElementById('reader');
+    vi.spyOn(readerEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 56, width: 800, height: 600, right: 800, bottom: 656
+    });
+    readerEl.scrollLeft = 0;
+    readerEl.scrollTop = 100;
+
+    // Two-finger pinch on page1 to 1.5x around (400, 256) -> focal (400, 200)
+    const startEvt = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(startEvt, 'touches', {
+      value: [{ clientX: 350, clientY: 256 }, { clientX: 450, clientY: 256 }]
+    });
+    const moveEvt = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(moveEvt, 'touches', {
+      value: [{ clientX: 325, clientY: 256 }, { clientX: 475, clientY: 256 }]
+    });
+    const endEvt = new Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(endEvt, 'touches', { value: [] });
+
+    act(() => {
+      page1.dispatchEvent(startEvt);
+      page1.dispatchEvent(moveEvt);
+      page1.dispatchEvent(endEvt);
+    });
+
+    expect(onZoomChange).toHaveBeenCalledWith(1.5);
+
+    // Rerender with updated zoom -> layout effect anchors scroll around focal point (400, 200)
+    rerender(
+      <PdfReader
+        paperId="p-pinch"
+        zoom={1.5}
+        initialPosition={{ page: 1, offset: 0 }}
+        onScroll={vi.fn()}
+        onZoomChange={onZoomChange}
+        readerApiRef={createRef()}
+        pdfjsLoader={loader}
+      />
+    );
+
+    expect(readerEl.scrollLeft).toBe(200);
+    expect(readerEl.scrollTop).toBe(250);
+  });
 });
 
 describe('LinkPreviewDialog', () => {

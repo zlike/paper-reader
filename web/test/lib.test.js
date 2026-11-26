@@ -249,7 +249,9 @@ describe('reading-progress helpers', () => {
     expect(paperIdFromPath(null)).toBeNull();
     expect(paperIdFromPath('/')).toBeNull();
 
-    expect(normalizeZoom(1.37)).toBe(1.25);
+    expect(normalizeZoom(1.37)).toBe(1.35);
+    expect(normalizeZoom(1.25)).toBe(1.25);
+    expect(normalizeZoom(1.04)).toBe(1.05);
     expect(normalizeZoom(0.1)).toBe(1);
     expect(normalizeZoom(5)).toBe(2.5);
     expect(normalizeZoom(Number.NaN)).toBe(1);
