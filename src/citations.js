@@ -1,3 +1,5 @@
+import { dehyphenateLineWraps } from '../web/src/lib/dehyphenate.js';
+
 const OPENALEX_API = 'https://api.openalex.org/works';
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const DATACITE_API = 'https://api.datacite.org/dois';
@@ -221,12 +223,13 @@ export function citationQuery(text) {
   const arxivId = extractArxivId(text);
   if (doi) return { doi, arxivId, query: doi, bibTitle: null, year: null, subtitle: null };
   if (arxivId) return { doi: null, arxivId, query: arxivId, bibTitle: null, year: null, subtitle: null };
-  const title = text.match(/["“]([^"”]{12,})["”]/)?.[1];
-  const yearMatch = text.match(/\b(19\d{2}|20[0-3]\d)\b/);
+  const normalizedInput = dehyphenateLineWraps(text);
+  const title = normalizedInput.match(/["“]([^"”]{12,})["”]/)?.[1];
+  const yearMatch = normalizedInput.match(/\b(19\d{2}|20[0-3]\d)\b/);
   const year = yearMatch ? Number(yearMatch[1]) : null;
-  const bibTitle = title ? null : extractBibTitle(text);
-  const subtitle = extractSubtitlePrefix(bibTitle || text);
-  const cleaned = (title || text).replace(/^\s*\[\d+(?:\s*[-,]\s*\d+)*\]\s*/, '')
+  const bibTitle = title ? null : extractBibTitle(normalizedInput);
+  const subtitle = extractSubtitlePrefix(bibTitle || normalizedInput);
+  const cleaned = (title || normalizedInput).replace(/^\s*\[\d+(?:\s*[-,]\s*\d+)*\]\s*/, '')
     .replace(/[^\p{L}\p{N}\s-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
   if (cleaned.length < 5 || /^\d+$/.test(cleaned)) {
     throw new Error('Select the full bibliography entry or paper title, not just a reference number');

@@ -12,6 +12,9 @@ import {
   highlightLinkTarget,
   sanitizeTitleForSearch
 } from '../src/lib/link-highlight.js';
+import { dehyphenateLineWraps, shouldPreserveHyphen } from '../src/lib/dehyphenate.js';
+import * as nodeDict from '../src/lib/dehyphenate-dict.js';
+import * as browserDict from '../src/lib/dehyphenate-dict.browser.js';
 
 function createSpan(text, { left = 0, top = 0, width, height = 12, useRect = true, styleLeft, styleTop, fontSize } = {}) {
   const span = document.createElement('span');
@@ -559,11 +562,12 @@ describe('applyHighlightRange, clearTargetHighlights, and highlightLinkTarget', 
     clearTargetHighlights(null);
   });
 
-  it('returns sanitized searchTitle when highlighted title spans line-wrap dashes', () => {
+  it('returns sanitized searchTitle preserving compound hyphens and joining split words across line wraps', () => {
     const layer = createTextLayer([
       createSpan('[1] J. Researcher. Trans—', { left: 40, top: 200, width: 160, height: 12 }),
-      createSpan('formers for Multi–', { left: 56, top: 216, width: 140, height: 12 }),
-      createSpan('agent Systems. NeurIPS, 2024.', { left: 56, top: 232, width: 180, height: 12 })
+      createSpan('formers for Self–', { left: 56, top: 216, width: 140, height: 12 }),
+      createSpan('Feedback Multi–', { left: 56, top: 232, width: 140, height: 12 }),
+      createSpan('agent Systems. NeurIPS, 2024.', { left: 56, top: 248, width: 180, height: 12 })
     ]);
 
     const result = highlightLinkTarget({
@@ -572,12 +576,12 @@ describe('applyHighlightRange, clearTargetHighlights, and highlightLinkTarget', 
     });
 
     expect(result.matchedTitle).toBe(true);
-    expect(result.text).toBe('Trans— formers for Multi– agent Systems');
-    expect(result.searchTitle).toBe('Transformers for Multiagent Systems');
+    expect(result.text).toBe('Trans— formers for Self– Feedback Multi– agent Systems');
+    expect(result.searchTitle).toBe('Transformers for Self-Feedback Multi-agent Systems');
   });
 });
 
-describe('sanitizeTitleForSearch', () => {
+describe('sanitizeTitleForSearch & word-aware dehyphenation', () => {
   it('returns empty string for empty, whitespace, or non-string inputs', () => {
     expect(sanitizeTitleForSearch('')).toBe('');
     expect(sanitizeTitleForSearch('   \t\n  ')).toBe('');
@@ -585,15 +589,29 @@ describe('sanitizeTitleForSearch', () => {
     expect(sanitizeTitleForSearch(undefined)).toBe('');
   });
 
-  it('joins words split across PDF line wraps with hyphens, en-dashes, em-dashes, and soft hyphens', () => {
+  it('joins single words split across PDF line wraps with hyphens, en-dashes, em-dashes, and soft hyphens', () => {
     expect(sanitizeTitleForSearch('Trans- formers for Everyone')).toBe('Transformers for Everyone');
     expect(sanitizeTitleForSearch('Trans-\nformers for Everyone')).toBe('Transformers for Everyone');
-    expect(sanitizeTitleForSearch('Multi– agent Debate')).toBe('Multiagent Debate');
-    expect(sanitizeTitleForSearch('Multi–\nagent Debate')).toBe('Multiagent Debate');
-    expect(sanitizeTitleForSearch('Multi— agent Debate')).toBe('Multiagent Debate');
-    expect(sanitizeTitleForSearch('Multi—\r\n  agent Debate')).toBe('Multiagent Debate');
+    expect(sanitizeTitleForSearch('Reflexion: an au- tonomous agent')).toBe('Reflexion: an autonomous agent');
+    expect(sanitizeTitleForSearch('Retrieving in- formation for di- alogue')).toBe('Retrieving information for dialogue');
+    expect(sanitizeTitleForSearch('Ex- plain yourself! common- sense reasoning')).toBe('Explain yourself! commonsense reasoning');
+    expect(sanitizeTitleForSearch('Emergent capabil- ities and prompt- ing')).toBe('Emergent capabilities and prompting');
     expect(sanitizeTitleForSearch('Collab\u00AD oration in \u00ADModels')).toBe('Collaboration in Models');
-    expect(sanitizeTitleForSearch('a- b- c')).toBe('abc');
+  });
+
+  it('preserves compound hyphens across PDF line wraps (issue #20)', () => {
+    expect(sanitizeTitleForSearch('Self-Refine: Iterative Refinement with Self-\nFeedback')).toBe('Self-Refine: Iterative Refinement with Self-Feedback');
+    expect(sanitizeTitleForSearch('Self-Refine: Iterative Refinement with Self–\nFeedback')).toBe('Self-Refine: Iterative Refinement with Self-Feedback');
+    expect(sanitizeTitleForSearch('Multi– agent Debate')).toBe('Multi-agent Debate');
+    expect(sanitizeTitleForSearch('Multi–\nagent Debate')).toBe('Multi-agent Debate');
+    expect(sanitizeTitleForSearch('Multi—\r\n  agent Debate')).toBe('Multi-agent Debate');
+    expect(sanitizeTitleForSearch('Chain-of- thought prompting')).toBe('Chain-of-thought prompting');
+    expect(sanitizeTitleForSearch('End-to- end and Text-to- image models')).toBe('End-to-end and Text-to-image models');
+    expect(sanitizeTitleForSearch('GPT- 4, LLaMA- 2, and 3D- aware agents')).toBe('GPT-4, LLaMA-2, and 3D-aware agents');
+    expect(sanitizeTitleForSearch('e- snli and n- gram benchmarks')).toBe('e-snli and n-gram benchmarks');
+    expect(sanitizeTitleForSearch('a- b- c')).toBe('a-b-c');
+    expect(sanitizeTitleForSearch('Multiple- Choice and Human- AI evaluation')).toBe('Multiple-Choice and Human-AI evaluation');
+    expect(sanitizeTitleForSearch('self-feed- back loop')).toBe('self-feedback loop');
   });
 
   it('removes inline/spaced en-dashes and em-dashes while preserving normal inline hyphens and collapsing whitespace', () => {
@@ -601,5 +619,23 @@ describe('sanitizeTitleForSearch', () => {
     expect(sanitizeTitleForSearch('Encoder–Decoder   Architecture  –  Revisited')).toBe('Encoder Decoder Architecture Revisited');
     expect(sanitizeTitleForSearch('Large language models are zero-shot reasoners')).toBe('Large language models are zero-shot reasoners');
     expect(sanitizeTitleForSearch('  State-of-the-Art   Methods - Overview  ')).toBe('State-of-the-Art Methods - Overview');
+  });
+
+  it('handles direct shouldPreserveHyphen and dehyphenateLineWraps edge cases', () => {
+    expect(dehyphenateLineWraps('')).toBe('');
+    expect(dehyphenateLineWraps(null)).toBe('');
+    expect(shouldPreserveHyphen('', 'test')).toBe(false);
+    expect(shouldPreserveHyphen('test', '')).toBe(false);
+    // Bound suffix joining (e.g. "visual- izations", "learn- ers")
+    expect(shouldPreserveHyphen('visual', 'izations')).toBe(false);
+    expect(shouldPreserveHyphen('learn', 'ers')).toBe(false);
+    // Capitalized proper-noun compound right half vs ALL-CAPS split
+    expect(shouldPreserveHyphen('Multi', 'FooBar')).toBe(true);
+    expect(shouldPreserveHyphen('MULTI', 'FOOBAR')).toBe(false);
+    // Node and browser dictionary loaders produce identical word sets from .txt files
+    expect(browserDict.CLOSED_WORDS).toEqual(nodeDict.CLOSED_WORDS);
+    expect(browserDict.BOUND_SUFFIXES).toEqual(nodeDict.BOUND_SUFFIXES);
+    expect(browserDict.COMPOUND_LEFT).toEqual(nodeDict.COMPOUND_LEFT);
+    expect(browserDict.COMPOUND_RIGHT).toEqual(nodeDict.COMPOUND_RIGHT);
   });
 });

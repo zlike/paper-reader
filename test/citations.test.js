@@ -72,6 +72,24 @@ test('citationQuery extracts DOI, arXiv ID, year, subtitle prefix, and rejects b
   assert.throws(() => citationQuery('[42]'), /bibliography entry/);
 });
 
+test('citationQuery applies word-aware dehyphenation to pasted line-wrapped titles and references', () => {
+  const selfRefine = citationQuery('Self-Refine: Iterative Refinement with Self-\nFeedback');
+  assert.equal(selfRefine.query, 'Self-Refine Iterative Refinement with Self-Feedback');
+  assert.deepEqual(selfRefine.subtitle, {
+    prefix: 'Self-Refine',
+    rest: 'Iterative Refinement with Self-Feedback'
+  });
+
+  const enDash = citationQuery('Self-Refine: Iterative Refinement with Self–\nFeedback');
+  assert.equal(enDash.query, 'Self-Refine Iterative Refinement with Self-Feedback');
+
+  const splitWord = citationQuery('Reflexion: an au-\ntonomous agent with dynamic in-\nformation memory');
+  assert.equal(splitWord.query, 'Reflexion an autonomous agent with dynamic information memory');
+
+  const wrappedBib = citationQuery('[1] Madaan, A. et al. (2023). Self-Refine: Iterative Refinement with Self-\nFeedback. NeurIPS.');
+  assert.equal(wrappedBib.bibTitle, 'Self-Refine Iterative Refinement with Self-Feedback');
+});
+
 test('direct arXiv ID fast-path returns confident match with direct OA PDF', async () => {
   const fetchImpl = async url => {
     assert.match(url, /export\.arxiv\.org\/api\/query\?id_list=2303\.11366/);
