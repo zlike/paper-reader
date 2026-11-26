@@ -17,7 +17,8 @@ const ADD_PAPER_DIALOG = {
   title: 'Find a paper',
   hint: 'Search for a paper by title or DOI.',
   initialText: '',
-  label: 'Paper title or DOI'
+  label: 'Paper title or DOI',
+  autoSearch: false
 };
 
 const CITATION_DIALOG = {
@@ -46,7 +47,8 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
   const [dialogState, setDialogState] = useState({
     open: false,
     ...CITATION_DIALOG,
-    initialText: ''
+    initialText: '',
+    autoSearch: false
   });
 
   const papersRef = useRef(papers);
@@ -260,12 +262,13 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     });
   }, []);
 
-  const handleFindCitation = useCallback(text => {
+  const handleFindCitation = useCallback((text, { autoSearch = false } = {}) => {
     dismissSelection();
     setDialogState({
       open: true,
       ...CITATION_DIALOG,
-      initialText: text
+      initialText: text,
+      autoSearch: Boolean(autoSearch)
     });
   }, [dismissSelection]);
 
@@ -336,6 +339,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
         hint={dialogState.hint}
         initialText={dialogState.initialText}
         label={dialogState.label}
+        autoSearch={dialogState.autoSearch}
         onClose={handleCloseDialog}
         onPaperAdded={refreshLibrary}
         onOpenPaper={id => openPaper(id)}
