@@ -120,7 +120,6 @@ export function CitationDialog({
         setStatus('This paper is already in your library.');
       } else if (result.confident?.hasPdf) {
         setStatus('Exact match found.');
-        await handleDownload(result.confident, session);
       } else if (result.confident) {
         setStatus('Exact match found, but no open-access PDF is listed.');
       } else {
@@ -131,7 +130,7 @@ export function CitationDialog({
     } finally {
       if (session === sessionRef.current) setSearching(false);
     }
-  }, [handleDownload]);
+  }, []);
 
   runSearchRef.current = runSearch;
 

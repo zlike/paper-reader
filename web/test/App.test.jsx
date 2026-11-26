@@ -269,11 +269,17 @@ describe('App integration', () => {
   it('shows Find cited paper button on PDF text selection and opens citation dialog', async () => {
     const user = userEvent.setup();
     window.history.replaceState({}, '', '/papers/p1');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ papers, readingState: { lastPaperId: 'p1', positions: {} } })
-    }));
+    const fetchMock = vi.fn().mockImplementation(async url => {
+      if (url === '/api/citations/search') {
+        return { ok: true, status: 200, json: async () => ({ confident: null, candidates: [] }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ papers, readingState: { lastPaperId: 'p1', positions: {} } })
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
     const { loader } = createPdfjsLoader();
     render(<App pdfjsLoader={loader} />);
 
@@ -297,9 +303,82 @@ describe('App integration', () => {
     await user.click(findBtn);
     expect(screen.getByText('Find a cited paper')).toBeInTheDocument();
     expect(screen.getByLabelText('Citation text')).toHaveValue('Selected Citation');
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/citations/search',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ text: 'Selected Citation' })
+        })
+      );
+    });
 
     await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(document.getElementById('citation-dialog')).not.toHaveAttribute('open');
+  });
+
+  it('sanitizes line-wrapped reading-pane selection, preserves compound hyphens, auto-triggers search, and ignores empty sanitized selection', async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, '', '/papers/p1');
+    const fetchMock = vi.fn().mockImplementation(async url => {
+      if (url === '/api/citations/search') {
+        return { ok: true, status: 200, json: async () => ({ confident: null, candidates: [] }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ papers, readingState: { lastPaperId: 'p1', positions: {} } })
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { loader } = createPdfjsLoader();
+    render(<App pdfjsLoader={loader} />);
+
+    const page1 = await screen.findByLabelText('Page 1');
+    await waitFor(() => {
+      expect(page1.querySelector('.textLayer')).toBeTruthy();
+    });
+
+    const textNode = page1.querySelector('.textLayer').firstChild;
+    const selectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => 'Self-\nfeedback in au-\ntonomous agents',
+      anchorNode: textNode
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const findBtn = screen.getByRole('button', { name: 'Find cited paper' });
+    expect(findBtn).not.toHaveAttribute('hidden');
+    await user.click(findBtn);
+
+    expect(screen.getByLabelText('Citation text')).toHaveValue('Self-feedback in autonomous agents');
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/citations/search',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ text: 'Self-feedback in autonomous agents' })
+        })
+      );
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    const searchCallsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/citations/search').length;
+
+    // Selection that sanitizes to empty string keeps the button hidden and never triggers a spurious search
+    selectionSpy.mockReturnValue({
+      toString: () => '\u00AD\u2014   ',
+      anchorNode: textNode
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    expect(findBtn).toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(document.getElementById('citation-dialog')).not.toHaveAttribute('open');
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/citations/search')).toHaveLength(searchCallsBefore);
   });
 
   it('downloads a paper from CitationDialog and opens it in the reader', async () => {

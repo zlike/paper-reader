@@ -286,10 +286,10 @@ describe('CitationDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('auto-downloads confident DOI match (existing), handles confident without PDF, empty results, and errors', async () => {
+  it('does not auto-download confident DOI match, downloads explicitly on click (existing), and handles confident without PDF, empty results, and errors', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn()
-      // 1. Confident match with PDF -> auto-downloads -> existing paper
+      // 1. Confident match with PDF -> displays result without auto-downloading, then downloads on explicit click
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -340,10 +340,16 @@ describe('CitationDialog', () => {
       />
     );
 
-    // 1. Confident with PDF
+    // 1. Confident with PDF does NOT auto-download; user clicks Download PDF explicitly
     await user.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Exact match found.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/citations/download')).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: 'Download PDF' }));
     expect(await screen.findByText('This paper is already in your library.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open existing paper' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/citations/download', expect.objectContaining({ method: 'POST' }));
 
     // 2. Confident without PDF
     await user.click(screen.getByRole('button', { name: 'Search' }));
@@ -1710,5 +1716,60 @@ describe('LinkPreviewDialog', () => {
     expect(findBtn).toHaveTextContent('Find selected paper');
     fireEvent.click(findBtn);
     expect(onFindCitation).toHaveBeenCalledWith('Attention Is All You Need', { autoSearch: true });
+  });
+
+  it('sanitizes manual line-wrapped text selection before searching and ignores empty sanitized selection', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { doc, pdfjs } = createPreviewPdfDoc({ numPages: 3 });
+    const onFindCitation = vi.fn();
+
+    render(
+      <LinkPreviewDialog
+        open
+        pdfDoc={doc}
+        pdfjs={pdfjs}
+        destination="top-p3"
+        requestId={22}
+        onClose={vi.fn()}
+        onJumpToTarget={vi.fn()}
+        onFindCitation={onFindCitation}
+      />
+    );
+
+    const previewPages = document.getElementById('link-preview-pages');
+    await waitFor(() => {
+      expect(previewPages.querySelector('.page[data-page="3"] .textLayer span')).toBeTruthy();
+    });
+
+    const textNode = previewPages.querySelector('.page[data-page="3"] .textLayer span').firstChild;
+    const selectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => 'Self-\nfeedback in au-\ntonomous agents',
+      anchorNode: textNode,
+      isCollapsed: false,
+      removeAllRanges: vi.fn()
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const findBtn = document.getElementById('link-preview-find-selection');
+    expect(findBtn).not.toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).toHaveBeenCalledWith('Self-feedback in autonomous agents', { autoSearch: true });
+
+    onFindCitation.mockClear();
+    selectionSpy.mockReturnValue({
+      toString: () => '\u00AD\u2014   ',
+      anchorNode: textNode,
+      isCollapsed: false,
+      removeAllRanges: vi.fn()
+    });
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    expect(findBtn).toHaveAttribute('hidden');
+    fireEvent.click(findBtn);
+    expect(onFindCitation).not.toHaveBeenCalled();
   });
 });
