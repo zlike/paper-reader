@@ -1,17 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, writeFile, rm } from 'node:fs/promises';
+import { deflateSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
 import { Storage } from '../src/storage.js';
-import { createApp } from '../src/app.js';
+import { createApp, deriveTitleFromUrl, extractArxivIdFromUrl } from '../src/app.js';
 import { citationQuery, extractDoi, searchCitation, getCandidate } from '../src/citations.js';
-import { downloadPdf, isPublicAddress } from '../src/download.js';
+import { downloadPdf, isPublicAddress, isRejectedContentType } from '../src/download.js';
+import { PdfScanError, cleanPdfTitle, scanPdf } from '../src/pdf-scanner.js';
+import { createTestPdf } from '../e2e/helpers/pdf-fixture.js';
 
-const pdf = Buffer.from('%PDF-1.4\nsample content\n%%EOF');
-const pdf2 = Buffer.from('%PDF-1.4\nsecond sample!!\n%%EOF');
-const pdf3 = Buffer.from('%PDF-1.4\nthird sample!!!\n%%EOF');
+const pdf = createTestPdf(['Sample PDF 1']);
+const pdf2 = createTestPdf(['Second sample PDF 2']);
+const pdf3 = createTestPdf(['Third sample PDF 3']);
 const item = {
   id: 'https://openalex.org/W123', title: 'A paper', doi: 'https://doi.org/10.1234/example',
   authorships: [{ author: { display_name: 'A Author' } }], publication_year: 2024,
@@ -46,7 +49,9 @@ test('download rejects non-HTTPS and loopback destinations before connecting', a
 
 test('upload, limits, citation download, open and persistent library', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-test-'));
-  const storage = new Storage({ dataDir: dir, maxPdfBytes: 60, maxStorageBytes: 70 });
+  const maxPdfBytes = Math.max(pdf.length, pdf2.length, pdf3.length) + 100;
+  const maxStorageBytes = pdf.length + pdf2.length + 50;
+  const storage = new Storage({ dataDir: dir, maxPdfBytes, maxStorageBytes });
   await storage.init();
   const services = {
     searchCitation: async () => ({
@@ -73,8 +78,9 @@ test('upload, limits, citation download, open and persistent library', async t =
     return fetch(`${base}/api/papers`, { method: 'POST', body });
   };
   const bad = await upload('not a PDF');
+  assert.equal(bad.status, 422);
   assert.match((await bad.json()).error, /not a valid PDF/);
-  const oversized = await upload('x'.repeat(61));
+  const oversized = await upload('x'.repeat(maxPdfBytes + 1));
   assert.match((await oversized.json()).error, /size limit/);
   const uploaded = await upload(pdf);
   assert.equal(uploaded.status, 201);
@@ -322,8 +328,8 @@ test('multi-key duplicate prevention, search existingPaperId annotation, and DEL
   await storage.init();
 
   let downloadCalls = 0;
-  const arxivPdf = Buffer.from('%PDF-1.4\narxiv multiagent debate pdf\n%%EOF');
-  const otherPdf = Buffer.from('%PDF-1.4\nanother distinct paper pdf\n%%EOF');
+  const arxivPdf = createTestPdf(['ArXiv multiagent debate paper']);
+  const otherPdf = createTestPdf(['Another distinct paper']);
 
   const services = {
     searchCitation: async () => ({
@@ -471,4 +477,213 @@ test('multi-key duplicate prevention, search existingPaperId annotation, and DEL
   const delMissing = await fetch(`${base}/api/papers/${firstBody.paper.id}`, { method: 'DELETE' });
   assert.equal(delMissing.status, 404);
   assert.deepEqual(await delMissing.json(), { error: 'Paper not found' });
+});
+
+function withCatalogExtra(basePdf, extraEntry) {
+  const str = basePdf.toString('latin1');
+  return Buffer.from(str.replace('/Type /Catalog ', `/Type /Catalog ${extraEntry} `), 'latin1');
+}
+
+function withInfoTitle(basePdf, titleText) {
+  const str = basePdf.toString('latin1');
+  const infoObj = `99 0 obj\n<< /Title (${titleText}) >>\nendobj\n`;
+  const updated = str
+    .replace('xref\n', `${infoObj}xref\n`)
+    .replace('/Root 1 0 R >>', '/Root 1 0 R /Info 99 0 R >>');
+  return Buffer.from(updated, 'latin1');
+}
+
+function withCompressedObjStm(basePdf, hiddenContent) {
+  const compressed = deflateSync(Buffer.from(hiddenContent, 'latin1'));
+  const objStm = Buffer.concat([
+    Buffer.from(`88 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`, 'latin1'),
+    compressed,
+    Buffer.from('\nendstream\nendobj\n', 'latin1')
+  ]);
+  const eofIdx = basePdf.lastIndexOf('%%EOF');
+  return Buffer.concat([basePdf.subarray(0, eofIdx), objStm, basePdf.subarray(eofIdx)]);
+}
+
+test('Content-Type rejection, URL title derivation, arXiv extraction, and PDF title sanitization', () => {
+  assert.equal(isRejectedContentType('text/html; charset=utf-8'), true);
+  assert.equal(isRejectedContentType('application/javascript'), true);
+  assert.equal(isRejectedContentType('application/x-msdownload'), true);
+  assert.equal(isRejectedContentType('application/x-executable'), true);
+  assert.equal(isRejectedContentType('application/pdf'), false);
+  assert.equal(isRejectedContentType('application/pdf; charset=binary'), false);
+  assert.equal(isRejectedContentType('application/octet-stream'), false);
+  assert.equal(isRejectedContentType(''), false);
+
+  assert.equal(
+    deriveTitleFromUrl('https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf'),
+    'language models are unsupervised multitask learners'
+  );
+  assert.equal(extractArxivIdFromUrl('https://arxiv.org/pdf/2305.14325v2.pdf'), '2305.14325');
+  assert.equal(extractArxivIdFromUrl('https://cdn.openai.com/foo.pdf'), null);
+
+  assert.equal(cleanPdfTitle('Attention Is All You Need'), 'Attention Is All You Need');
+  assert.equal(cleanPdfTitle('Untitled'), null);
+  assert.equal(cleanPdfTitle('Microsoft Word - final_draft.docx'), null);
+  assert.equal(cleanPdfTitle('paper.pdf'), null);
+});
+
+test('PDF scanner rejects malicious fixtures, allows benign /OpenAction destination, and cleans up temp files', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-scan-'));
+  const storage = new Storage({ dataDir: dir, maxPdfBytes: 1024 * 1024, maxStorageBytes: 10 * 1024 * 1024 });
+  await storage.init();
+
+  const validBase = createTestPdf(['Benign Academic Paper Page 1']);
+  const fixtures = new Map([
+    ['https://example.org/js.pdf', withCatalogExtra(validBase, '/Names << /JavaScript << /Names [(a) << /S /JavaScript /JS (app.alert(1)) >>] >> >>')],
+    ['https://example.org/hex-js.pdf', withCatalogExtra(validBase, '/OpenAction << /S /J#61vaScript /J#53 (app.alert(1)) >>')],
+    ['https://example.org/launch.pdf', withCatalogExtra(validBase, '/OpenAction << /S /Launch /F (cmd.exe) >>')],
+    ['https://example.org/embedded.pdf', withCatalogExtra(validBase, '/Names << /EmbeddedFiles << /Names [(a) << /Type /Filespec /EF << /F 1 0 R >> /Subtype /EmbeddedFile >>] >> >>')],
+    ['https://example.org/xfa.pdf', withCatalogExtra(validBase, '/AcroForm << /XFA 1 0 R >>')],
+    ['https://example.org/encrypt.pdf', Buffer.from(validBase.toString('latin1').replace('/Root 1 0 R >>', '/Root 1 0 R /Encrypt << /V 1 >> >>'), 'latin1')],
+    ['https://example.org/html-polyglot.pdf', Buffer.concat([Buffer.from('<html><script>alert(1)</script>'), validBase])],
+    ['https://example.org/exe-polyglot.pdf', Buffer.concat([Buffer.from('MZ\x90\x00'), validBase])],
+    ['https://example.org/objstm-js.pdf', withCompressedObjStm(validBase, '5 0 << /S /JS /JS (alert(1)) >>')],
+    ['https://example.org/openaction-dict.pdf', withCatalogExtra(validBase, '/OpenAction << /S /URI /URI (https://evil.example) >>')],
+    ['https://example.org/benign-openaction.pdf', withCatalogExtra(validBase, '/OpenAction [4 0 R /Fit]')]
+  ]);
+
+  const server = createApp(storage, {
+    downloadPdf: async (url, destination) => {
+      const buf = fixtures.get(url);
+      if (!buf) throw new Error('Unexpected URL');
+      await writeFile(destination, buf);
+    }
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    storage.db.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const maliciousUrls = [
+    'https://example.org/js.pdf',
+    'https://example.org/hex-js.pdf',
+    'https://example.org/launch.pdf',
+    'https://example.org/embedded.pdf',
+    'https://example.org/xfa.pdf',
+    'https://example.org/encrypt.pdf',
+    'https://example.org/html-polyglot.pdf',
+    'https://example.org/exe-polyglot.pdf',
+    'https://example.org/objstm-js.pdf',
+    'https://example.org/openaction-dict.pdf'
+  ];
+
+  for (const url of maliciousUrls) {
+    const res = await fetch(`${base}/api/papers/from-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    assert.equal(res.status, 422, `Expected 422 for ${url}`);
+    const body = await res.json();
+    assert.match(body.error, /PDF rejected/i, `Expected rejection message for ${url}: ${body.error}`);
+    const tmpFiles = await readdir(storage.tmpDir);
+    assert.equal(tmpFiles.length, 0, `Temp file leaked for ${url}`);
+  }
+
+  // Benign /OpenAction [4 0 R /Fit] (LaTeX/hyperref view destination) must pass
+  const benignRes = await fetch(`${base}/api/papers/from-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.org/benign-openaction.pdf' })
+  });
+  assert.equal(benignRes.status, 201);
+  assert.equal((await benignRes.json()).paper.title, 'benign openaction');
+});
+
+test('POST /api/papers/from-url handles title priority, URL validation, and arXiv/hash deduplication', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-from-url-'));
+  const storage = new Storage({ dataDir: dir, maxPdfBytes: 1024 * 1024, maxStorageBytes: 10 * 1024 * 1024 });
+  await storage.init();
+
+  let downloadCalls = 0;
+  const plainPdf = createTestPdf(['Language Models are Unsupervised Multitask Learners']);
+  const titledPdf = withInfoTitle(createTestPdf(['Metadata Titled Paper']), 'Clean Metadata Paper Title');
+  const junkTitledPdf = withInfoTitle(createTestPdf(['Junk Metadata Paper']), 'Microsoft Word - draft.docx');
+  const arxivPdf = createTestPdf(['ArXiv Paper via URL']);
+
+  const server = createApp(storage, {
+    downloadPdf: async (url, destination) => {
+      downloadCalls += 1;
+      if (url.includes('html-page')) {
+        const err = new Error('URL did not return a PDF (Content-Type: text/html)');
+        err.status = 422;
+        throw err;
+      }
+      if (url.includes('private-ip')) {
+        const err = new Error('PDF download address is not public');
+        err.status = 400;
+        throw err;
+      }
+      if (url.includes('metadata-title')) return writeFile(destination, titledPdf);
+      if (url.includes('junk_title_fallback')) return writeFile(destination, junkTitledPdf);
+      if (url.includes('arxiv.org')) return writeFile(destination, arxivPdf);
+      return writeFile(destination, plainPdf);
+    }
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    storage.db.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const postUrl = payload => fetch(`${base}/api/papers/from-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  // Validation rejections
+  assert.equal((await postUrl({})).status, 400);
+  assert.equal((await postUrl({ url: 'http://example.org/a.pdf' })).status, 400);
+  assert.equal((await postUrl({ url: 'https://example.org/a.pdf', title: 'x'.repeat(501) })).status, 400);
+  assert.equal((await postUrl({ url: 'https://example.org/private-ip.pdf' })).status, 400);
+  assert.equal((await postUrl({ url: 'https://example.org/html-page' })).status, 422);
+
+  // 1. Filename fallback title derivation
+  const r1 = await postUrl({ url: 'https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf' });
+  assert.equal(r1.status, 201);
+  const b1 = await r1.json();
+  assert.equal(b1.existing, false);
+  assert.equal(b1.paper.title, 'language models are unsupervised multitask learners');
+
+  // 2. Duplicate by identical bytes returns 200 existing: true
+  const r1Dup = await postUrl({ url: 'https://mirror.example.org/same_file.pdf' });
+  assert.equal(r1Dup.status, 200);
+  const b1Dup = await r1Dup.json();
+  assert.equal(b1Dup.existing, true);
+  assert.equal(b1Dup.paper.id, b1.paper.id);
+
+  // 3. Clean PDF /Title metadata beats URL filename
+  const r2 = await postUrl({ url: 'https://example.org/metadata-title.pdf' });
+  assert.equal(r2.status, 201);
+  assert.equal((await r2.json()).paper.title, 'Clean Metadata Paper Title');
+
+  // 4. Junk PDF /Title falls back to URL filename, and user-provided title overrides all
+  const r3 = await postUrl({ url: 'https://example.org/junk_title_fallback.pdf' });
+  assert.equal(r3.status, 201);
+  assert.equal((await r3.json()).paper.title, 'junk title fallback');
+
+  // 5. arXiv URL pre-download dedup
+  const callsBeforeArxiv = downloadCalls;
+  const r4 = await postUrl({ url: 'https://arxiv.org/pdf/2305.14325v1.pdf', title: 'Custom ArXiv Title' });
+  assert.equal(r4.status, 201);
+  const b4 = await r4.json();
+  assert.equal(b4.paper.title, 'Custom ArXiv Title');
+  assert.equal(downloadCalls, callsBeforeArxiv + 1);
+
+  const r4Dup = await postUrl({ url: 'https://arxiv.org/pdf/2305.14325v2.pdf' });
+  assert.equal(r4Dup.status, 200);
+  const b4Dup = await r4Dup.json();
+  assert.equal(b4Dup.existing, true);
+  assert.equal(b4Dup.paper.id, b4.paper.id);
+  assert.equal(downloadCalls, callsBeforeArxiv + 1);
 });

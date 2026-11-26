@@ -666,6 +666,46 @@ test('LinkPreviewDialog accurately highlights right-column title in two-column a
   await expect(page.locator('#citation-text')).toHaveValue(/Large language models are/);
 });
 
+test('Add PDF via From URL tab supports adding, duplicate detection, and security-scan rejection', async ({ page }) => {
+  await page.goto(server.baseUrl);
+  await expect(page.locator('#library')).toHaveClass(/open/);
+
+  await page.locator('#add-paper').click();
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#tab-search')).toHaveAttribute('aria-selected', 'true');
+
+  // Switch to From URL tab
+  await page.locator('#tab-from-url').click();
+  await expect(page.locator('#tab-from-url')).toHaveAttribute('aria-selected', 'true');
+
+  const validUrl = 'https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf';
+  await page.locator('#pdf-url-input').fill(validUrl);
+  await page.locator('#add-pdf-url').click();
+
+  await expect(page.locator('#search-status')).toContainText('PDF added to your library.');
+  await expect(page.locator('#url-result')).toContainText('language models are unsupervised multitask learners');
+  await page.locator('#url-result').getByRole('button', { name: 'Open paper' }).click();
+
+  await expect(page.locator('#citation-dialog')).not.toBeVisible();
+  await expect(page.locator('#current-title')).toHaveText('language models are unsupervised multitask learners');
+  await expect(page.locator('.page[data-page="1"] .textLayer')).toContainText('Unsupervised Multitask Learners');
+
+  // Re-open + Add PDF -> From URL and submit the same URL -> duplicate detected
+  await page.locator('#library-toggle').click();
+  await page.locator('#add-paper').click();
+  await page.locator('#tab-from-url').click();
+  await page.locator('#pdf-url-input').fill(validUrl);
+  await page.locator('#add-pdf-url').click();
+
+  await expect(page.locator('#search-status')).toContainText('This paper is already in your library.');
+  await expect(page.locator('#url-result').getByRole('button', { name: 'Open existing paper' })).toBeVisible();
+
+  // Submitting a malicious PDF URL displays the security-scan rejection error
+  await page.locator('#pdf-url-input').fill('https://evil.example/malicious.pdf');
+  await page.locator('#add-pdf-url').click();
+  await expect(page.locator('#search-status')).toContainText('embedded JavaScript is not allowed');
+});
+
 test('desktop mouse hover over PDF links shows pointer cursor in reader and link preview dialog without blocking text selection', async ({ page }) => {
   await server.uploadPdf(
     'Desktop Link Cursor Paper',

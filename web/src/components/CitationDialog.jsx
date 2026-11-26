@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { downloadCitation, searchCitations } from '../lib/api.js';
+import { addPaperFromUrl, downloadCitation, searchCitations } from '../lib/api.js';
 
 function candidateKey(candidate) {
   return `${candidate.source}:${candidate.id}`;
@@ -25,21 +25,29 @@ export function CitationDialog({
   initialText,
   label,
   autoSearch = false,
+  allowUrl = false,
   onClose,
   onPaperAdded,
   onOpenPaper
 }) {
   const dialogRef = useRef(null);
   const textareaRef = useRef(null);
+  const urlInputRef = useRef(null);
   const sessionRef = useRef(0);
   const runSearchRef = useRef(null);
 
+  const [mode, setMode] = useState('search');
   const [text, setText] = useState(initialText || '');
   const [searching, setSearching] = useState(false);
   const [status, setStatus] = useState('');
   const [providers, setProviders] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [itemStates, setItemStates] = useState({});
+
+  const [pdfUrl, setPdfUrl] = useState('');
+  const [customTitle, setCustomTitle] = useState('');
+  const [addingUrl, setAddingUrl] = useState(false);
+  const [urlResult, setUrlResult] = useState(null);
 
   const handleNativeClose = useCallback(() => {
     sessionRef.current += 1;
@@ -141,12 +149,17 @@ export function CitationDialog({
       const session = sessionRef.current + 1;
       sessionRef.current = session;
       const nextText = initialText || '';
+      setMode('search');
       setText(nextText);
       setSearching(false);
       setStatus('');
       setProviders([]);
       setCandidates([]);
       setItemStates({});
+      setPdfUrl('');
+      setCustomTitle('');
+      setAddingUrl(false);
+      setUrlResult(null);
       if (!dialog.open && typeof dialog.showModal === 'function') {
         dialog.showModal();
       }
@@ -157,15 +170,57 @@ export function CitationDialog({
     } else {
       sessionRef.current += 1;
       setText('');
+      setPdfUrl('');
+      setCustomTitle('');
+      setUrlResult(null);
       if (dialog.open && typeof dialog.close === 'function') {
         dialog.close();
       }
     }
-  }, [open, initialText, title, hint, label, autoSearch]);
+  }, [open, initialText, title, hint, label, autoSearch, allowUrl]);
 
   const handleSearch = useCallback(async () => {
     await runSearch(text, sessionRef.current);
   }, [text, runSearch]);
+
+  const handleSwitchMode = useCallback(nextMode => {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    setStatus('');
+    setUrlResult(null);
+    if (nextMode === 'url') {
+      queueMicrotask(() => urlInputRef.current?.focus());
+    } else {
+      queueMicrotask(() => textareaRef.current?.focus());
+    }
+  }, [mode]);
+
+  const handleAddFromUrl = useCallback(async event => {
+    event.preventDefault();
+    const trimmedUrl = pdfUrl.trim();
+    if (!trimmedUrl) return;
+    const session = sessionRef.current;
+    setAddingUrl(true);
+    setUrlResult(null);
+    setStatus('Downloading and scanning PDF…');
+    try {
+      const result = await addPaperFromUrl(trimmedUrl, customTitle.trim());
+      await onPaperAdded();
+      if (session !== sessionRef.current) return;
+      setUrlResult({
+        paperId: result.paper.id,
+        title: result.paper.title,
+        existing: Boolean(result.existing)
+      });
+      setStatus(result.existing ? 'This paper is already in your library.' : 'PDF added to your library.');
+    } catch (error) {
+      if (session === sessionRef.current) setStatus(error.message);
+    } finally {
+      if (session === sessionRef.current) setAddingUrl(false);
+    }
+  }, [pdfUrl, customTitle, onPaperAdded]);
+
+  const activeMode = allowUrl ? mode : 'search';
 
   return (
     <dialog
@@ -185,124 +240,208 @@ export function CitationDialog({
           ✕
         </button>
       </div>
-      <p id="dialog-hint" className="hint">{hint}</p>
-      <textarea
-        ref={textareaRef}
-        id="citation-text"
-        rows={4}
-        maxLength={4000}
-        aria-label={label}
-        placeholder={label}
-        value={text}
-        onChange={event => setText(event.target.value)}
-      />
-      <button
-        id="search-citation"
-        type="button"
-        className="primary"
-        disabled={searching}
-        onClick={handleSearch}
-      >
-        Search
-      </button>
-      <div id="search-status" role="status">{status}</div>
-      {(searching || providers.length > 0) && (
-        <div className="provider-indicators" aria-label="Search providers">
-          {(searching ? DEFAULT_PROVIDERS : providers).map(provider => {
-            const stateClass = searching
-              ? 'is-searching'
-              : provider.status === 'ok'
-                ? 'is-ok'
-                : provider.status === 'error'
-                  ? 'is-error'
-                  : 'is-empty';
-            const detailText = searching
-              ? 'Searching…'
-              : provider.status === 'ok'
-                ? `${provider.count} ${provider.count === 1 ? 'match' : 'matches'}`
-                : provider.status === 'error'
-                  ? (provider.error || 'Search failed')
-                  : (provider.reason || 'No matches');
-            const badgeText = searching
-              ? null
-              : provider.status === 'ok'
-                ? String(provider.count)
-                : provider.status === 'error'
-                  ? 'Error'
-                  : '0';
-            return (
-              <span
-                key={provider.id}
-                className={`provider-pill ${stateClass}`}
-                title={`${provider.name}: ${detailText}`}
-              >
-                <span className="provider-dot" aria-hidden="true" />
-                <span>{provider.name}</span>
-                {badgeText !== null && (
-                  <span className="provider-count">{badgeText}</span>
-                )}
-              </span>
-            );
-          })}
+      {allowUrl && (
+        <div className="dialog-tabs" role="tablist" aria-label="Add PDF method">
+          <button
+            type="button"
+            role="tab"
+            id="tab-search"
+            className={`dialog-tab${activeMode === 'search' ? ' is-active' : ''}`}
+            aria-selected={activeMode === 'search'}
+            onClick={() => handleSwitchMode('search')}
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="tab-from-url"
+            className={`dialog-tab${activeMode === 'url' ? ' is-active' : ''}`}
+            aria-selected={activeMode === 'url'}
+            onClick={() => handleSwitchMode('url')}
+          >
+            From URL
+          </button>
         </div>
       )}
-      {!searching && providers.some(provider => provider.status === 'error') && (
-        <ul className="provider-errors" aria-label="Provider errors">
-          {providers
-            .filter(provider => provider.status === 'error')
-            .map(provider => (
-              <li key={provider.id}>
-                <strong>{provider.name}:</strong> {provider.error || 'Search failed'}
-              </li>
-            ))}
-        </ul>
-      )}
-      <div id="results">
-        {candidates.map(candidate => {
-          const key = candidateKey(candidate);
-          const itemState = itemStates[key];
-          const sourceLabel = SOURCE_LABELS[candidate.source];
-          const details = [
-            sourceLabel,
-            candidate.authors,
-            candidate.year,
-            candidate.doi && `DOI: ${candidate.doi}`
-          ].filter(Boolean).join(' · ');
+      {activeMode === 'search' ? (
+        <>
+          <p id="dialog-hint" className="hint">{hint}</p>
+          <textarea
+            ref={textareaRef}
+            id="citation-text"
+            rows={4}
+            maxLength={4000}
+            aria-label={label}
+            placeholder={label}
+            value={text}
+            onChange={event => setText(event.target.value)}
+          />
+          <button
+            id="search-citation"
+            type="button"
+            className="primary"
+            disabled={searching}
+            onClick={handleSearch}
+          >
+            Search
+          </button>
+          <div id="search-status" role="status">{status}</div>
+          {(searching || providers.length > 0) && (
+            <div className="provider-indicators" aria-label="Search providers">
+              {(searching ? DEFAULT_PROVIDERS : providers).map(provider => {
+                const stateClass = searching
+                  ? 'is-searching'
+                  : provider.status === 'ok'
+                    ? 'is-ok'
+                    : provider.status === 'error'
+                      ? 'is-error'
+                      : 'is-empty';
+                const detailText = searching
+                  ? 'Searching…'
+                  : provider.status === 'ok'
+                    ? `${provider.count} ${provider.count === 1 ? 'match' : 'matches'}`
+                    : provider.status === 'error'
+                      ? (provider.error || 'Search failed')
+                      : (provider.reason || 'No matches');
+                const badgeText = searching
+                  ? null
+                  : provider.status === 'ok'
+                    ? String(provider.count)
+                    : provider.status === 'error'
+                      ? 'Error'
+                      : '0';
+                return (
+                  <span
+                    key={provider.id}
+                    className={`provider-pill ${stateClass}`}
+                    title={`${provider.name}: ${detailText}`}
+                  >
+                    <span className="provider-dot" aria-hidden="true" />
+                    <span>{provider.name}</span>
+                    {badgeText !== null && (
+                      <span className="provider-count">{badgeText}</span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {!searching && providers.some(provider => provider.status === 'error') && (
+            <ul className="provider-errors" aria-label="Provider errors">
+              {providers
+                .filter(provider => provider.status === 'error')
+                .map(provider => (
+                  <li key={provider.id}>
+                    <strong>{provider.name}:</strong> {provider.error || 'Search failed'}
+                  </li>
+                ))}
+            </ul>
+          )}
+          <div id="results">
+            {candidates.map(candidate => {
+              const key = candidateKey(candidate);
+              const itemState = itemStates[key];
+              const sourceLabel = SOURCE_LABELS[candidate.source];
+              const details = [
+                sourceLabel,
+                candidate.authors,
+                candidate.year,
+                candidate.doi && `DOI: ${candidate.doi}`
+              ].filter(Boolean).join(' · ');
 
-          let buttonText = candidate.hasPdf ? 'Download PDF' : 'No open-access PDF listed';
-          let buttonDisabled = !candidate.hasPdf;
-          let onClick = () => handleDownload(candidate, sessionRef.current);
+              let buttonText = candidate.hasPdf ? 'Download PDF' : 'No open-access PDF listed';
+              let buttonDisabled = !candidate.hasPdf;
+              let onClick = () => handleDownload(candidate, sessionRef.current);
 
-          if (itemState?.status === 'downloading') {
-            buttonText = 'Downloading…';
-            buttonDisabled = true;
-          } else if (itemState?.status === 'ready') {
-            buttonText = itemState.existing ? 'Open existing paper' : 'Open paper';
-            buttonDisabled = false;
-            onClick = () => {
-              closeDialog();
-              onOpenPaper(itemState.paperId);
-            };
-          } else if (itemState?.status === 'error') {
-            buttonText = 'Retry download';
-            buttonDisabled = false;
-          }
+              if (itemState?.status === 'downloading') {
+                buttonText = 'Downloading…';
+                buttonDisabled = true;
+              } else if (itemState?.status === 'ready') {
+                buttonText = itemState.existing ? 'Open existing paper' : 'Open paper';
+                buttonDisabled = false;
+                onClick = () => {
+                  closeDialog();
+                  onOpenPaper(itemState.paperId);
+                };
+              } else if (itemState?.status === 'error') {
+                buttonText = 'Retry download';
+                buttonDisabled = false;
+              }
 
-          return (
-            <div key={key} className="result">
-              <strong>{candidate.title}</strong>
-              <p className="hint">{details}</p>
+              return (
+                <div key={key} className="result">
+                  <strong>{candidate.title}</strong>
+                  <p className="hint">{details}</p>
+                  <button
+                    type="button"
+                    disabled={buttonDisabled}
+                    onClick={onClick}
+                  >
+                    {buttonText}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <>
+          <p id="dialog-hint" className="hint">
+            Paste a direct HTTPS link to a PDF. Files are scanned for safety before being added.
+          </p>
+          <form className="url-form" onSubmit={handleAddFromUrl}>
+            <label className="field-label" htmlFor="pdf-url-input">
+              PDF URL
+              <input
+                ref={urlInputRef}
+                id="pdf-url-input"
+                type="url"
+                inputMode="url"
+                placeholder="https://example.org/paper.pdf"
+                maxLength={2048}
+                value={pdfUrl}
+                onChange={event => setPdfUrl(event.target.value)}
+                required
+              />
+            </label>
+            <label className="field-label" htmlFor="pdf-title-input">
+              Title (optional)
+              <input
+                id="pdf-title-input"
+                type="text"
+                placeholder="Leave blank to detect from PDF or URL"
+                maxLength={500}
+                value={customTitle}
+                onChange={event => setCustomTitle(event.target.value)}
+              />
+            </label>
+            <button
+              id="add-pdf-url"
+              type="submit"
+              className="primary"
+              disabled={addingUrl || !pdfUrl.trim()}
+            >
+              Add PDF
+            </button>
+          </form>
+          <div id="search-status" role="status">{status}</div>
+          {urlResult && (
+            <div id="url-result" className="result">
+              <strong>{urlResult.title}</strong>
               <button
                 type="button"
-                disabled={buttonDisabled}
-                onClick={onClick}
+                onClick={() => {
+                  closeDialog();
+                  onOpenPaper(urlResult.paperId);
+                }}
               >
-                {buttonText}
+                {urlResult.existing ? 'Open existing paper' : 'Open paper'}
               </button>
             </div>
-          );
-        })}
-      </div>
+          )}
+        </>
+      )}
     </dialog>
   );
 }

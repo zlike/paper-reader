@@ -21,6 +21,7 @@ A self-hosted, touch-first Progressive Web App (PWA) for reading research papers
 
 ### One-Tap Cited Paper Discovery & Federated Search
 - **Find cited papers from anywhere**: Search by title, DOI, arXiv ID, or bibliography entry via **+ Add PDF**, by selecting text in a PDF, or directly from a highlighted citation preview (**Find selected paper**).
+- **Add PDFs by URL with built-in safety scanning**: Paste any public `https://` PDF link in **+ Add PDF → From URL** (with an optional custom title). Every ingested PDF is scanned before saving to block polyglot headers, encrypted PDFs, embedded JavaScript, active launch/media/form/auto-trigger actions, and malformed documents.
 - **Multi-engine federated search**: Queries [OpenAlex](https://openalex.org/), [arXiv](https://arxiv.org/), and [Crossref](https://www.crossref.org/) simultaneously with live per-provider status indicators and match counts.
 - **Word-aware PDF line-wrap dehyphenation**: Automatically repairs hyphenated words split across PDF line or column breaks while preserving true compound hyphens for more accurate search queries.
 - **Open-access downloads & duplicate prevention**: Downloads verified open-access PDFs (auto-downloading confident matches when available) and detects papers already in your library so you can open them immediately instead of downloading duplicates.

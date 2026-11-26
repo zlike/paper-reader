@@ -31,6 +31,18 @@ export function downloadCitation(source, id) {
   });
 }
 
+export function addPaperFromUrl(url, title) {
+  const payload = { url };
+  if (typeof title === 'string' && title.trim()) {
+    payload.title = title.trim();
+  }
+  return apiFetch('/api/papers/from-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
 export function savePaperProgress(paperId, payload, { keepalive = false } = {}) {
   const url = `/api/papers/${encodeURIComponent(paperId)}/progress`;
   const body = JSON.stringify(payload);
