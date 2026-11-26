@@ -257,6 +257,7 @@ h2 { font-size: 1.2rem; }
 #reader {
   flex: 1;
   min-width: 0;
+  isolation: isolate;
   overflow-x: auto;
   overflow-y: scroll;
   overscroll-behavior: contain;
@@ -269,7 +270,7 @@ h2 { font-size: 1.2rem; }
 #empty { padding: 60px 20px; text-align: center; color: #526074; }
 #pages { padding: 16px 8px; display: flex; flex-direction: column; align-items: safe center; gap: 16px; }
 #pages.pinching { will-change: transform; }
-.page { background: white; position: relative; box-shadow: 0 2px 8px #0002; flex: none; overflow: hidden; }
+.page { background: white; position: relative; isolation: isolate; box-shadow: 0 2px 8px #0002; flex: none; overflow: hidden; }
 .page canvas { display: block; width: 100%; height: 100%; }
 .page .textLayer { position: absolute; inset: 0; }
 .page .textLayer mark.link-target-highlight {
@@ -389,6 +390,7 @@ dialog::backdrop { background: #10182799; }
 .link-preview-body {
   flex: 1;
   min-height: 0;
+  isolation: isolate;
   overflow: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;

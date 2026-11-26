@@ -1081,4 +1081,90 @@ test('reading-pane "Find cited paper" sanitizes line-wrapped selection and auto-
   await expect(page.locator('.result').first()).toContainText('Transformers for Everyone');
 });
 
+test('high z-index PDF link annotations stay contained below the open Library drawer (issue #28)', async ({ page }) => {
+  await page.setViewportSize({ width: 412, height: 915 });
+
+  // Create 12 link annotations on Page 1 so pdfjs-dist assigns incrementing inline z-index values >= 10
+  // (higher than #library-backdrop z-index: 5 and aside#library z-index: 6).
+  const links = Array.from({ length: 12 }, (_, i) => {
+    const yBottom = 680 - i * 36;
+    return {
+      fromPage: 1,
+      toPage: 2,
+      rect: [72, yBottom, 220, yBottom + 24],
+      destX: 72,
+      destY: 720
+    };
+  });
+
+  await server.uploadPdf(
+    'Many Annotations Paper',
+    [
+      [
+        { text: 'Page 1: Many citations [1][2][3][4][5][6][7][8][9][10][11][12]', x: 72, y: 720, size: 12 }
+      ],
+      [
+        { text: 'Page 2: References', x: 72, y: 720, size: 14 }
+      ]
+    ],
+    { links }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Many Annotations Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const annotations = page1.locator('.annotationLayer section.linkAnnotation');
+  await expect(annotations).toHaveCount(12);
+
+  // Open the Library navigation drawer over the PDF page
+  await page.locator('#library-toggle').click();
+  await expect(page.locator('#library')).toHaveClass(/open/);
+
+  // Wait for drawer slide-in transition to settle
+  await expect.poll(async () => {
+    const box = await page.locator('#library').boundingBox();
+    return box ? Math.round(box.x) : -1;
+  }).toBe(0);
+
+  // Verify a high-z-index link annotation positioned beneath the open drawer does not stack above #library
+  const stackingCheck = await page.evaluate(() => {
+    const library = document.getElementById('library');
+    const libRect = library.getBoundingClientRect();
+    const sections = Array.from(document.querySelectorAll('.page[data-page="1"] .annotationLayer section.linkAnnotation'));
+    const highZ = sections.find(el => {
+      const z = Number.parseInt(el.style.zIndex || getComputedStyle(el).zIndex, 10);
+      if (!(z >= 10)) return false;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      return r.width > 0 && r.height > 0 && cx > libRect.left + 2 && cx < libRect.right - 2 && cy > libRect.top + 2 && cy < libRect.bottom - 2;
+    });
+    if (!highZ) return { found: false };
+
+    const zIndex = Number.parseInt(highZ.style.zIndex || getComputedStyle(highZ).zIndex, 10);
+    const rect = highZ.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    const prevPointerEvents = highZ.style.pointerEvents;
+    highZ.style.pointerEvents = 'auto';
+    const topEl = document.elementFromPoint(cx, cy);
+    highZ.style.pointerEvents = prevPointerEvents;
+
+    return {
+      found: true,
+      zIndex,
+      insideLibrary: Boolean(topEl && (topEl === library || library.contains(topEl))),
+      topTag: topEl?.tagName ?? null,
+      topClass: topEl?.className ?? null
+    };
+  });
+
+  expect(stackingCheck.found).toBe(true);
+  expect(stackingCheck.zIndex).toBeGreaterThanOrEqual(10);
+  expect(stackingCheck.insideLibrary, `Expected #library on top, got <${stackingCheck.topTag} class="${stackingCheck.topClass}">`).toBe(true);
+});
+
+
 
