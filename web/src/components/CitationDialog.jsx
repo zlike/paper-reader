@@ -8,13 +8,15 @@ function candidateKey(candidate) {
 const DEFAULT_PROVIDERS = [
   { id: 'OPENALEX', name: 'OpenAlex' },
   { id: 'ARXIV', name: 'arXiv' },
-  { id: 'CROSSREF', name: 'Crossref' }
+  { id: 'CROSSREF', name: 'Crossref' },
+  { id: 'DBLP', name: 'DBLP' }
 ];
 
 const SOURCE_LABELS = {
   OPENALEX: 'OpenAlex',
   ARXIV: 'arXiv',
   CROSSREF: 'Crossref',
+  DBLP: 'DBLP',
   SEMANTIC_SCHOLAR: 'Semantic Scholar'
 };
 

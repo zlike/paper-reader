@@ -567,7 +567,8 @@ describe('CitationDialog', () => {
     expect(bar).toHaveTextContent('OpenAlex');
     expect(bar).toHaveTextContent('arXiv');
     expect(bar).toHaveTextContent('Crossref');
-    expect(bar.querySelectorAll('.provider-pill.is-searching')).toHaveLength(3);
+    expect(bar).toHaveTextContent('DBLP');
+    expect(bar.querySelectorAll('.provider-pill.is-searching')).toHaveLength(4);
 
     await act(async () => {
       resolveSearch({

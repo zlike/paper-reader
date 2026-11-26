@@ -5,13 +5,17 @@ import {
   extractArxivId,
   citationQuery,
   searchCitation,
-  getCandidate
+  getCandidate,
+  clearSearchCache,
+  resetOpenAlexCooldown
 } from '../src/citations.js';
 
-function jsonResponse(body, status = 200) {
+function jsonResponse(body, status = 200, headers = {}) {
+  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: name => lower[name.toLowerCase()] ?? null },
     json: async () => body,
     text: async () => JSON.stringify(body)
   };
@@ -257,7 +261,8 @@ test('Semantic Scholar is queried when S2_API_KEY is set and gracefully skips HT
   assert.equal(result.candidates[0].id, 'W42');
 });
 
-test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async () => {
+test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async t => {
+  t.after(() => resetOpenAlexCooldown());
   const fetchImpl = async url => {
     if (url.includes('export.arxiv.org')) return xmlResponse('', 429);
     if (url.includes('api.datacite.org')) {
@@ -274,6 +279,7 @@ test('arXiv search falls back to DataCite arXiv DOI registry on HTTP 429', async
     }
     if (url.includes('api.openalex.org')) return jsonResponse({}, 429);
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     throw new Error(`Unexpected URL: ${url}`);
   };
   const result = await searchCitation(
@@ -351,6 +357,7 @@ test('multi-line Kadavath et al. citation resolves with arXiv ID, wrapped arXiv 
     }
     if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
     if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
     throw new Error(`Unexpected URL: ${url}`);
   };
 
@@ -443,10 +450,136 @@ test('getCandidate validates and securely re-resolves every supported source', a
     ['ARXIV', 'https://evil.example/a.pdf'],
     ['CROSSREF', 'not-a-doi'],
     ['CROSSREF', 'https://evil.example/10.1234/x'],
+    ['DBLP', '../etc/passwd'],
+    ['DBLP', 'https://evil.example/paper.pdf'],
     ['SEMANTIC_SCHOLAR', 'not-40-hex'],
     ['UNKNOWN', 'W123'],
     [null, 'W123']
   ]) {
     await assert.rejects(() => getCandidate(source, id, fetchImpl), /Invalid paper identifier/);
   }
+});
+
+test('OPENALEX_API_KEY sends Bearer auth header, TTL cache avoids repeat calls, and 429 cooldown skips network', async t => {
+  const prevKey = process.env.OPENALEX_API_KEY;
+  process.env.OPENALEX_API_KEY = 'oa-secret-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENALEX_API_KEY;
+    else process.env.OPENALEX_API_KEY = prevKey;
+    clearSearchCache();
+    resetOpenAlexCooldown();
+  });
+
+  // 1. Bearer auth + TTL cache hit
+  let calls = 0;
+  let sawAuthHeader = null;
+  const okFetch = async (url, init) => {
+    calls += 1;
+    if (url.includes('api.openalex.org')) {
+      sawAuthHeader = init?.headers?.Authorization || null;
+      return jsonResponse({
+        results: [{
+          id: 'https://openalex.org/W555',
+          title: 'Attention Is All You Need',
+          authorships: [{ author: { display_name: 'Ashish Vaswani' } }],
+          publication_year: 2017,
+          locations: [{ is_oa: true, pdf_url: 'https://arxiv.org/pdf/1706.03762.pdf' }]
+        }]
+      });
+    }
+    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
+    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
+    return jsonResponse({});
+  };
+
+  const first = await searchCitation('Attention Is All You Need', okFetch, { useCache: true });
+  const callsAfterFirst = calls;
+  const second = await searchCitation('  attention  is all you need ', okFetch, { useCache: true });
+  assert.equal(sawAuthHeader, 'Bearer oa-secret-key');
+  assert.equal(calls, callsAfterFirst, 'second identical query should hit TTL cache');
+  assert.equal(second.candidates[0].id, first.candidates[0].id);
+
+  // 2. OpenAlex 429 daily_budget triggers cooldown and skips subsequent OpenAlex calls
+  clearSearchCache();
+  let oaCalls = 0;
+  const rateLimitFetch = async url => {
+    if (url.includes('api.openalex.org')) {
+      oaCalls += 1;
+      return jsonResponse({ error: 'Rate limit exceeded', reason: 'daily_budget', retryAfter: 3600 }, 429);
+    }
+    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([{
+      id: '2305.14325v1',
+      title: 'Improving Factuality and Reasoning in Language Models through Multiagent Debate',
+      authors: ['Yilun Du'],
+      year: 2023
+    }]));
+    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    if (url.includes('dblp.org')) return jsonResponse({ result: { hits: { hit: [] } } });
+    return jsonResponse({});
+  };
+
+  const r1 = await searchCitation('Improving Factuality and Reasoning in Language Models through Multiagent Debate', rateLimitFetch);
+  assert.equal(oaCalls, 1);
+  assert.match(r1.providers.find(p => p.id === 'OPENALEX')?.error || '', /^Daily limit reached \(resets at \d{2}:\d{2} UTC\)$/);
+
+  const r2 = await searchCitation('Another Distinct Paper Title For Cooldown Check', rateLimitFetch);
+  assert.equal(oaCalls, 1, 'OpenAlex must not be called while in cooldown');
+  assert.match(r2.providers.find(p => p.id === 'OPENALEX')?.error || '', /^Daily limit reached \(resets at \d{2}:\d{2} UTC\)$/);
+});
+
+test('DBLP provider parses hits, handles bot-check HTML, and securely resolves getCandidate', async () => {
+  const dblpFetch = async url => {
+    if (url.includes('dblp.org/search/publ/api')) {
+      return jsonResponse({
+        result: {
+          hits: {
+            hit: [{
+              info: {
+                key: 'journals/jmlr/SrivastavaHKSS14',
+                title: 'Dropout: a simple way to prevent neural networks from overfitting.',
+                authors: { author: [{ text: 'Nitish Srivastava' }, { text: 'Geoffrey E. Hinton' }] },
+                year: '2014',
+                ee: 'https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf'
+              }
+            }]
+          }
+        }
+      });
+    }
+    if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
+    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
+    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    return jsonResponse({});
+  };
+
+  const res = await searchCitation('Dropout: A Simple Way to Prevent Neural Networks from Overfitting', dblpFetch);
+  assert.equal(res.candidates[0]?.source, 'DBLP');
+  assert.equal(res.candidates[0]?.id, 'journals/jmlr/SrivastavaHKSS14');
+  assert.equal(res.candidates[0]?.openAccess, true);
+  assert.equal(res.providers.find(p => p.id === 'DBLP')?.status, 'ok');
+
+  const resolved = await getCandidate('DBLP', 'journals/jmlr/SrivastavaHKSS14', dblpFetch);
+  assert.equal(resolved.source, 'DBLP');
+  assert.deepEqual(resolved.pdfUrls, ['https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf']);
+
+  // Anubis bot-check HTML produces a clean user-safe error without breaking other providers
+  const botCheckFetch = async url => {
+    if (url.includes('dblp.org')) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/html' },
+        text: async () => '<!doctype html><html><head><title>Making sure you&#39;re not a bot!</title></head></html>'
+      };
+    }
+    if (url.includes('api.openalex.org')) return jsonResponse({ results: [] });
+    if (url.includes('export.arxiv.org')) return xmlResponse(arxivFeed([]));
+    if (url.includes('api.crossref.org')) return jsonResponse({ message: { items: [] } });
+    return jsonResponse({});
+  };
+
+  const botRes = await searchCitation('Dropout: A Simple Way to Prevent Neural Networks from Overfitting', botCheckFetch);
+  assert.equal(botRes.providers.find(p => p.id === 'DBLP')?.status, 'error');
+  assert.equal(botRes.providers.find(p => p.id === 'DBLP')?.error, 'Blocked by bot check');
 });

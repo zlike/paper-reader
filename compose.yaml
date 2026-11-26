@@ -7,6 +7,7 @@ services:
     environment:
       MAX_PDF_MB: "${MAX_PDF_MB:-50}"
       MAX_STORAGE_MB: "${MAX_STORAGE_MB:-1024}"
+      OPENALEX_API_KEY: "${OPENALEX_API_KEY:-}"
     volumes:
       - papers:/data
 volumes:
