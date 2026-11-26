@@ -569,3 +569,220 @@ test('LinkPreviewDialog highlights cited paper title, preserves selection + Find
   await expect(page.locator('#citation-dialog')).toBeVisible();
   await expect(page.locator('#citation-text')).toHaveValue('Attention Is All You Need');
 });
+
+test('desktop mouse hover over PDF links shows pointer cursor in reader and link preview dialog without blocking text selection', async ({ page }) => {
+  await server.uploadPdf(
+    'Desktop Link Cursor Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720 },
+        { text: 'See reference [1] for details', x: 72, y: 400 }
+      ],
+      [
+        { text: 'Page 2: References', x: 72, y: 720 },
+        { text: '[1] Back to introduction', x: 72, y: 600 }
+      ]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 380, 340, 425], destX: 72, destY: 720 },
+        { fromPage: 2, toPage: 1, rect: [72, 580, 340, 625], destX: 72, destY: 720 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Desktop Link Cursor Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const readerLink = page1.locator('.linkAnnotation > a').first();
+  await expect(readerLink).toBeAttached();
+  await expect(page1.locator('.textLayer')).toContainText('See reference [1]');
+
+  // Annotation overlay keeps pointer-events: none so text selection over links remains unbroken
+  const annotationPointerEvents = await page1
+    .locator('.annotationLayer section')
+    .first()
+    .evaluate(el => getComputedStyle(el).pointerEvents);
+  expect(annotationPointerEvents).toBe('none');
+
+  const getCursorAt = (x, y) => page.evaluate(([px, py]) => {
+    const el = document.elementFromPoint(px, py);
+    return el ? getComputedStyle(el).cursor : null;
+  }, [x, y]);
+
+  // 1. Main reader: hovering over link shows pointer cursor; moving away reverts it
+  const linkBox = await readerLink.boundingBox();
+  const linkCenterX = linkBox.x + linkBox.width / 2;
+  const linkCenterY = linkBox.y + linkBox.height / 2;
+
+  await page.mouse.move(linkCenterX, linkCenterY);
+  await expect(page1).toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(linkCenterX, linkCenterY)).toBe('pointer');
+
+  const awayX = linkBox.x + linkBox.width / 2;
+  const awayY = linkBox.y + linkBox.height + 40;
+  await page.mouse.move(awayX, awayY);
+  await expect(page1).not.toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(awayX, awayY)).not.toBe('pointer');
+
+  // 2. Open LinkPreviewDialog and verify link hover cursor inside the preview modal
+  await page.mouse.click(linkCenterX, linkCenterY);
+  const previewDialog = page.locator('#link-preview-dialog');
+  await expect(previewDialog).toBeVisible();
+
+  const previewPage2 = page.locator('#link-preview-pages .page[data-page="2"]');
+  const previewLink = previewPage2.locator('.linkAnnotation > a').first();
+  await expect(previewLink).toBeAttached();
+  await expect(previewPage2.locator('.textLayer')).toContainText('Back to introduction');
+
+  const previewLinkBox = await previewLink.boundingBox();
+  const previewLinkX = previewLinkBox.x + previewLinkBox.width / 2;
+  const previewLinkY = previewLinkBox.y + previewLinkBox.height / 2;
+
+  await page.mouse.move(previewLinkX, previewLinkY);
+  await expect(previewPage2).toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(previewLinkX, previewLinkY)).toBe('pointer');
+
+  const previewAwayY = previewLinkBox.y + previewLinkBox.height + 40;
+  await page.mouse.move(previewLinkX, previewAwayY);
+  await expect(previewPage2).not.toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(previewLinkX, previewAwayY)).not.toBe('pointer');
+});
+
+test('pinch-to-zoom and ctrl+wheel zoom only affect reading pane, keep header and modals within viewport, and support panning', async ({ page }) => {
+  await server.uploadPdf(
+    'Pinch Zoom Isolation Paper',
+    [
+      'Page 1: Main text with citation [1] to test pinch zoom',
+      'Page 2: Reference [1] Vaswani et al., Attention Is All You Need'
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 380, 340, 425], destX: 72, destY: 720 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Pinch Zoom Isolation Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  await expect(page1.locator('canvas')).toBeVisible();
+  await expect(page.locator('#zoom-level')).toHaveText('100%');
+
+  const initialHeaderBox = await page.locator('header').boundingBox();
+  const initialPageBox = await page1.boundingBox();
+  const viewport = page.viewportSize();
+
+  // Verify touch-action CSS rules lock app shell while allowing pan in #reader
+  const touchActions = await page.evaluate(() => ({
+    reader: getComputedStyle(document.getElementById('reader')).touchAction,
+    header: getComputedStyle(document.querySelector('header')).touchAction
+  }));
+  expect(touchActions.reader).toContain('pan-x');
+  expect(touchActions.reader).toContain('pan-y');
+  expect(touchActions.header).toBe('manipulation');
+
+  // 1. Trackpad pinch (ctrl+wheel) over #reader zooms only the PDF
+  await page.evaluate(() => {
+    const target = document.querySelector('.page[data-page="1"]');
+    const rect = target.getBoundingClientRect();
+    target.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -100,
+      ctrlKey: true,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + 100
+    }));
+  });
+
+  await expect(page.locator('#zoom-level')).toHaveText('150%');
+  await expect.poll(async () => (await page1.boundingBox()).width).toBeGreaterThan(initialPageBox.width * 1.4);
+
+  // Browser visualViewport scale stays at 1 and header dimensions remain unchanged
+  const vpScaleAfterWheel = await page.evaluate(() => window.visualViewport?.scale ?? 1);
+  expect(vpScaleAfterWheel).toBe(1);
+  const headerAfterWheel = await page.locator('header').boundingBox();
+  expect(Math.round(headerAfterWheel.width)).toBe(Math.round(initialHeaderBox.width));
+  expect(Math.round(headerAfterWheel.height)).toBe(Math.round(initialHeaderBox.height));
+
+  // 2. Panning horizontally & vertically inside #reader when zoomed in
+  const panResult = await page.evaluate(() => {
+    const reader = document.getElementById('reader');
+    const maxScrollX = reader.scrollWidth - reader.clientWidth;
+    reader.scrollLeft = Math.min(80, maxScrollX);
+    reader.scrollTop = 120;
+    return {
+      canScrollX: maxScrollX > 0,
+      scrollLeft: reader.scrollLeft,
+      scrollTop: reader.scrollTop
+    };
+  });
+  expect(panResult.canScrollX).toBe(true);
+  expect(panResult.scrollLeft).toBeGreaterThan(0);
+  expect(panResult.scrollTop).toBeGreaterThan(0);
+
+  // 3. Two-finger touch pinch & pan over #reader zooms further and pans smoothly
+  await page.evaluate(() => {
+    const target = document.querySelector('.page[data-page="1"]');
+    const makeTouch = (type, points) => {
+      const ev = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'touches', { value: points });
+      return ev;
+    };
+    target.dispatchEvent(makeTouch('touchstart', [
+      { clientX: 250, clientY: 250 },
+      { clientX: 350, clientY: 250 }
+    ]));
+    target.dispatchEvent(makeTouch('touchmove', [
+      { clientX: 220, clientY: 230 },
+      { clientX: 360, clientY: 230 }
+    ]));
+    target.dispatchEvent(makeTouch('touchend', []));
+  });
+
+  await expect(page.locator('#zoom-level')).toHaveText('210%');
+  expect(await page.evaluate(() => window.visualViewport?.scale ?? 1)).toBe(1);
+
+  // 4. Ctrl+wheel on header is intercepted without changing PDF zoom
+  const headerWheelPrevented = await page.evaluate(() => {
+    const header = document.querySelector('header');
+    const ev = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100, ctrlKey: true });
+    header.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(headerWheelPrevented).toBe(true);
+  await page.waitForTimeout(160);
+  await expect(page.locator('#zoom-level')).toHaveText('210%');
+
+  // 5. Tap hyperlink while zoomed in -> LinkPreviewDialog stays strictly within viewport bounds
+  await page.evaluate(() => {
+    const reader = document.getElementById('reader');
+    reader.scrollLeft = 0;
+    reader.scrollTop = 0;
+  });
+  const readerLink = page1.locator('.linkAnnotation > a').first();
+  await expect(readerLink).toBeAttached();
+  await readerLink.evaluate(el => el.click());
+
+  const previewDialog = page.locator('#link-preview-dialog');
+  await expect(previewDialog).toBeVisible();
+  const dialogBox = await previewDialog.boundingBox();
+  expect(dialogBox.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBox.y).toBeGreaterThanOrEqual(0);
+  expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(viewport.height + 1);
+
+  // Ctrl+wheel inside open modal prevents browser zoom and does not change background PDF zoom
+  const modalWheelPrevented = await page.evaluate(() => {
+    const body = document.getElementById('link-preview-body');
+    const ev = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -100, ctrlKey: true });
+    body.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(modalWheelPrevented).toBe(true);
+  await page.waitForTimeout(160);
+  await expect(page.locator('#zoom-level')).toHaveText('210%');
+});

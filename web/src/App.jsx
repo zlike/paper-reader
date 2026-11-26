@@ -152,10 +152,10 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     scheduleSave(activeId, getCurrentPosition, zoomRef.current, id => currentIdRef.current === id);
   }, [getCurrentPosition, scheduleSave]);
 
-  const handleChangeZoom = useCallback(delta => {
+  const handleSetZoom = useCallback(targetZoom => {
     if (!currentIdRef.current) return;
     const previous = zoomRef.current;
-    const next = normalizeZoom(previous + delta);
+    const next = normalizeZoom(targetZoom);
     if (next === previous) return;
     const pos = getCurrentPosition();
     zoomRef.current = next;
@@ -166,6 +166,10 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
       sendProgress(currentIdRef.current, payload);
     }
   }, [getCurrentPosition, recordLocal, sendProgress]);
+
+  const handleChangeZoom = useCallback(delta => {
+    handleSetZoom(zoomRef.current + delta);
+  }, [handleSetZoom]);
 
   // Flush reading progress on page hide / tab backgrounding.
   useEffect(() => {
@@ -308,6 +312,8 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
           zoom={zoom}
           initialPosition={initialPosition}
           onScroll={handleReaderScroll}
+          onZoomChange={handleSetZoom}
+          zoomDisabled={libraryOpen || dialogState.open}
           onFindCitation={handleFindCitation}
           onPreviewOpenChange={handlePreviewOpenChange}
           pagesContainerRef={pagesContainerRef}

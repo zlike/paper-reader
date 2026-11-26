@@ -614,6 +614,13 @@ describe('PdfReader and PdfPage', () => {
     vi.spyOn(links[0], 'getBoundingClientRect').mockReturnValue({ left: 0, right: 10, top: 0, bottom: 10 });
     vi.spyOn(links[1], 'getBoundingClientRect').mockReturnValue({ left: 20, right: 60, top: 20, bottom: 60 });
     vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+
+    // Hovering over a link toggles page--link-hover on the hovered page
+    fireEvent.pointerMove(page1, { clientX: 30, clientY: 30, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass('page--link-hover');
+    fireEvent.pointerMove(page1, { clientX: 200, clientY: 200, pointerType: 'mouse', buttons: 0 });
+    expect(page1).not.toHaveClass('page--link-hover');
+
     fireEvent.click(page1, { clientX: 30, clientY: 30 });
     expect(linkClickSpy).toHaveBeenCalledTimes(1);
 
@@ -821,6 +828,69 @@ describe('PdfReader and PdfPage', () => {
     );
     expect(screen.getByText('Your papers, in one place.')).toBeInTheDocument();
   });
+
+  it('commits pinch-to-zoom on #reader and anchors scroll position around the focal point', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({});
+    const { loader } = createMockPdfjs({ numPages: 2 });
+    const onZoomChange = vi.fn();
+
+    const { rerender } = render(
+      <PdfReader
+        paperId="p-pinch"
+        zoom={1}
+        initialPosition={{ page: 1, offset: 0 }}
+        onScroll={vi.fn()}
+        onZoomChange={onZoomChange}
+        readerApiRef={createRef()}
+        pdfjsLoader={loader}
+      />
+    );
+
+    const page1 = await screen.findByLabelText('Page 1');
+    const readerEl = document.getElementById('reader');
+    vi.spyOn(readerEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 56, width: 800, height: 600, right: 800, bottom: 656
+    });
+    readerEl.scrollLeft = 0;
+    readerEl.scrollTop = 100;
+
+    // Two-finger pinch on page1 to 1.5x around (400, 256) -> focal (400, 200)
+    const startEvt = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(startEvt, 'touches', {
+      value: [{ clientX: 350, clientY: 256 }, { clientX: 450, clientY: 256 }]
+    });
+    const moveEvt = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(moveEvt, 'touches', {
+      value: [{ clientX: 325, clientY: 256 }, { clientX: 475, clientY: 256 }]
+    });
+    const endEvt = new Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(endEvt, 'touches', { value: [] });
+
+    act(() => {
+      page1.dispatchEvent(startEvt);
+      page1.dispatchEvent(moveEvt);
+      page1.dispatchEvent(endEvt);
+    });
+
+    expect(onZoomChange).toHaveBeenCalledWith(1.5);
+
+    // Rerender with updated zoom -> layout effect anchors scroll around focal point (400, 200)
+    rerender(
+      <PdfReader
+        paperId="p-pinch"
+        zoom={1.5}
+        initialPosition={{ page: 1, offset: 0 }}
+        onScroll={vi.fn()}
+        onZoomChange={onZoomChange}
+        readerApiRef={createRef()}
+        pdfjsLoader={loader}
+      />
+    );
+
+    expect(readerEl.scrollLeft).toBe(200);
+    expect(readerEl.scrollTop).toBe(250);
+  });
 });
 
 describe('LinkPreviewDialog', () => {
@@ -953,6 +1023,11 @@ describe('LinkPreviewDialog', () => {
     const internalLink = previewPage2.querySelector('.linkAnnotation > a');
     vi.spyOn(internalLink, 'getBoundingClientRect').mockReturnValue({ left: 10, right: 80, top: 10, bottom: 40 });
     vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+    // Hovering over link in preview toggles page--link-hover
+    fireEvent.pointerMove(previewPage2, { clientX: 30, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(previewPage2).toHaveClass('page--link-hover');
+    fireEvent.pointerLeave(previewPages);
+    expect(previewPage2).not.toHaveClass('page--link-hover');
     // Click outside link rect is a no-op
     fireEvent.click(previewPage2, { clientX: 200, clientY: 200 });
     expect(onNavigateInternal).not.toHaveBeenCalled();
@@ -971,7 +1046,12 @@ describe('LinkPreviewDialog', () => {
     fireEvent.click(document.querySelector('.link-preview-surface'));
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(document.getElementById('link-preview-dialog'));
+    // Stale native close event while dialog is already open is ignored
+    const dialogEl = document.getElementById('link-preview-dialog');
+    fireEvent(dialogEl, new Event('close'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(dialogEl);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

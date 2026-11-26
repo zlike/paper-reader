@@ -7,8 +7,10 @@ import {
   useState
 } from 'react';
 import { loadPdfjs } from '../lib/pdfjs.js';
-import { destinationPosition } from '../lib/pdf-links.js';
+import { destinationPosition, findLinkAtPoint } from '../lib/pdf-links.js';
 import { computeReadingPosition, computeScrollTop } from '../lib/reading-progress.js';
+import { useLinkHover } from '../hooks/useLinkHover.js';
+import { computeAnchoredScroll, usePinchZoom } from '../hooks/usePinchZoom.js';
 import { PdfPage } from './PdfPage.jsx';
 import { LinkPreviewDialog } from './LinkPreviewDialog.jsx';
 
@@ -17,6 +19,8 @@ export function PdfReader({
   zoom,
   initialPosition,
   onScroll,
+  onZoomChange,
+  zoomDisabled = false,
   onFindCitation,
   onPreviewOpenChange,
   pagesContainerRef,
@@ -24,12 +28,15 @@ export function PdfReader({
   pdfjsLoader = loadPdfjs
 }) {
   const readerRef = useRef(null);
+  const internalPagesRef = useRef(null);
+  const resolvedPagesRef = pagesContainerRef || internalPagesRef;
   const pageElementsRef = useRef(new Map());
   const pdfDocRef = useRef(null);
   const pdfjsRef = useRef(null);
   const hasLaidOutRef = useRef(false);
   const isRestoringRef = useRef(false);
   const pendingRestoreRef = useRef(null);
+  const pendingZoomAnchorRef = useRef(null);
   const prevZoomRef = useRef(zoom);
   const previewRequestIdRef = useRef(0);
 
@@ -94,6 +101,7 @@ export function PdfReader({
       hasLaidOutRef.current = false;
       isRestoringRef.current = false;
       pendingRestoreRef.current = null;
+      pendingZoomAnchorRef.current = null;
       setPdfDoc(null);
       setPageSlots([]);
       setVisiblePages(new Set());
@@ -167,8 +175,10 @@ export function PdfReader({
     if (prevZoomRef.current === zoom) return;
     prevZoomRef.current = zoom;
     if (!pdfDocRef.current || !hasLaidOutRef.current) return;
-    const pos = getCurrentPosition();
-    pendingRestoreRef.current = pos || { page: 1, offset: 0 };
+    if (!pendingZoomAnchorRef.current) {
+      const pos = getCurrentPosition();
+      pendingRestoreRef.current = pos || { page: 1, offset: 0 };
+    }
     setLayoutKey(k => k + 1);
   }, [zoom, getCurrentPosition]);
 
@@ -203,7 +213,22 @@ export function PdfReader({
 
   // Restore scroll position synchronously after layout commits.
   useLayoutEffect(() => {
-    if (!pageSlots.length || !pendingRestoreRef.current || !readerRef.current) return;
+    if (!pageSlots.length || !readerRef.current) return;
+    if (pendingZoomAnchorRef.current) {
+      const anchor = pendingZoomAnchorRef.current;
+      pendingZoomAnchorRef.current = null;
+      pendingRestoreRef.current = null;
+      isRestoringRef.current = true;
+      const next = computeAnchoredScroll(anchor);
+      readerRef.current.scrollLeft = next.scrollLeft;
+      readerRef.current.scrollTop = next.scrollTop;
+      hasLaidOutRef.current = true;
+      requestAnimationFrame(() => {
+        isRestoringRef.current = false;
+      });
+      return;
+    }
+    if (!pendingRestoreRef.current) return;
     const target = pendingRestoreRef.current;
     pendingRestoreRef.current = null;
     isRestoringRef.current = true;
@@ -214,6 +239,29 @@ export function PdfReader({
       isRestoringRef.current = false;
     });
   }, [pageSlots, layoutKey, getPageMetrics]);
+
+  const handlePinchCommitZoom = useCallback((nextZoom, { focalX, focalY, prevZoom }) => {
+    const reader = readerRef.current;
+    if (reader && hasLaidOutRef.current) {
+      pendingZoomAnchorRef.current = {
+        scrollLeft: reader.scrollLeft,
+        scrollTop: reader.scrollTop,
+        focalX,
+        focalY,
+        prevZoom,
+        nextZoom
+      };
+    }
+    onZoomChange?.(nextZoom);
+  }, [onZoomChange]);
+
+  usePinchZoom({
+    readerRef,
+    pagesRef: resolvedPagesRef,
+    zoom,
+    enabled: Boolean(paperId) && !zoomDisabled && !linkPreview.open,
+    onCommitZoom: handlePinchCommitZoom
+  });
 
   // Virtualize pages via IntersectionObserver.
   useEffect(() => {
@@ -309,21 +357,13 @@ export function PdfReader({
     }
   }, [handleLinkError]);
 
+  const linkHoverHandlers = useLinkHover();
+
   const handlePagesClick = useCallback(event => {
     if (event.target.closest('.annotationLayer') || !window.getSelection()?.isCollapsed) return;
     const page = event.target.closest('.page');
-    if (!page) return;
     // Hit-test links after selection so link overlays never block selecting PDF text.
-    for (const link of page.querySelectorAll('.linkAnnotation > a')) {
-      const rect = link.getBoundingClientRect();
-      if (
-        event.clientX >= rect.left && event.clientX <= rect.right &&
-        event.clientY >= rect.top && event.clientY <= rect.bottom
-      ) {
-        link.click();
-        break;
-      }
-    }
+    findLinkAtPoint(page, event.clientX, event.clientY)?.click();
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -351,7 +391,7 @@ export function PdfReader({
           </>
         )}
       </div>
-      <div id="pages" ref={pagesContainerRef} onClick={handlePagesClick}>
+      <div id="pages" ref={resolvedPagesRef} onClick={handlePagesClick} {...linkHoverHandlers}>
         {pageSlots.map(slot => (
           <PdfPage
             key={`${paperId}-${slot.pageNumber}`}

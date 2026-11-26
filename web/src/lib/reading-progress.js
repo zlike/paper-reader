@@ -16,9 +16,15 @@ export function paperPath(id) {
   return id ? `/papers/${encodeURIComponent(id)}` : '/';
 }
 
+export const MIN_ZOOM = 1;
+export const MAX_ZOOM = 2.5;
+export const ZOOM_STEP = 0.05;
+
 export function normalizeZoom(zoom) {
-  if (typeof zoom !== 'number' || !Number.isFinite(zoom)) return 1;
-  return Math.max(1, Math.min(2.5, Math.round(zoom * 4) / 4));
+  if (typeof zoom !== 'number' || !Number.isFinite(zoom)) return MIN_ZOOM;
+  const steps = Math.round(zoom / ZOOM_STEP);
+  const rounded = Math.round(steps * ZOOM_STEP * 100) / 100;
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rounded));
 }
 
 export function computeReadingPosition(pages, scrollTop) {
