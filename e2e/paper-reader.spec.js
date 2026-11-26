@@ -488,3 +488,83 @@ test('hyperlink preview modal touch ergonomics on iPad mini viewport', async ({ 
     await context.close();
   }
 });
+
+test('desktop mouse hover over PDF links shows pointer cursor in reader and link preview dialog without blocking text selection', async ({ page }) => {
+  await server.uploadPdf(
+    'Desktop Link Cursor Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720 },
+        { text: 'See reference [1] for details', x: 72, y: 400 }
+      ],
+      [
+        { text: 'Page 2: References', x: 72, y: 720 },
+        { text: '[1] Back to introduction', x: 72, y: 600 }
+      ]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 2, rect: [72, 380, 340, 425], destX: 72, destY: 720 },
+        { fromPage: 2, toPage: 1, rect: [72, 580, 340, 625], destX: 72, destY: 720 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Desktop Link Cursor Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const readerLink = page1.locator('.linkAnnotation > a').first();
+  await expect(readerLink).toBeAttached();
+  await expect(page1.locator('.textLayer')).toContainText('See reference [1]');
+
+  // Annotation overlay keeps pointer-events: none so text selection over links remains unbroken
+  const annotationPointerEvents = await page1
+    .locator('.annotationLayer section')
+    .first()
+    .evaluate(el => getComputedStyle(el).pointerEvents);
+  expect(annotationPointerEvents).toBe('none');
+
+  const getCursorAt = (x, y) => page.evaluate(([px, py]) => {
+    const el = document.elementFromPoint(px, py);
+    return el ? getComputedStyle(el).cursor : null;
+  }, [x, y]);
+
+  // 1. Main reader: hovering over link shows pointer cursor; moving away reverts it
+  const linkBox = await readerLink.boundingBox();
+  const linkCenterX = linkBox.x + linkBox.width / 2;
+  const linkCenterY = linkBox.y + linkBox.height / 2;
+
+  await page.mouse.move(linkCenterX, linkCenterY);
+  await expect(page1).toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(linkCenterX, linkCenterY)).toBe('pointer');
+
+  const awayX = linkBox.x + linkBox.width / 2;
+  const awayY = linkBox.y + linkBox.height + 40;
+  await page.mouse.move(awayX, awayY);
+  await expect(page1).not.toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(awayX, awayY)).not.toBe('pointer');
+
+  // 2. Open LinkPreviewDialog and verify link hover cursor inside the preview modal
+  await page.mouse.click(linkCenterX, linkCenterY);
+  const previewDialog = page.locator('#link-preview-dialog');
+  await expect(previewDialog).toBeVisible();
+
+  const previewPage2 = page.locator('#link-preview-pages .page[data-page="2"]');
+  const previewLink = previewPage2.locator('.linkAnnotation > a').first();
+  await expect(previewLink).toBeAttached();
+  await expect(previewPage2.locator('.textLayer')).toContainText('Back to introduction');
+
+  const previewLinkBox = await previewLink.boundingBox();
+  const previewLinkX = previewLinkBox.x + previewLinkBox.width / 2;
+  const previewLinkY = previewLinkBox.y + previewLinkBox.height / 2;
+
+  await page.mouse.move(previewLinkX, previewLinkY);
+  await expect(previewPage2).toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(previewLinkX, previewLinkY)).toBe('pointer');
+
+  const previewAwayY = previewLinkBox.y + previewLinkBox.height + 40;
+  await page.mouse.move(previewLinkX, previewAwayY);
+  await expect(previewPage2).not.toHaveClass(/page--link-hover/);
+  expect(await getCursorAt(previewLinkX, previewAwayY)).not.toBe('pointer');
+});

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { computePreviewTarget, resolveDestination } from '../lib/pdf-links.js';
+import { computePreviewTarget, findLinkAtPoint, resolveDestination } from '../lib/pdf-links.js';
+import { useLinkHover } from '../hooks/useLinkHover.js';
 import { useTextSelection } from '../hooks/useTextSelection.js';
 import { PdfPage } from './PdfPage.jsx';
 
@@ -40,7 +41,7 @@ export function LinkPreviewDialog({
     }
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open) {
@@ -138,6 +139,7 @@ export function LinkPreviewDialog({
   }, [previewState]);
 
   const handleNativeClose = useCallback(() => {
+    if (dialogRef.current?.open) return;
     clearModalSelection();
     dismissSelection();
     onClose();
@@ -185,20 +187,12 @@ export function LinkPreviewDialog({
     setError(`Unable to preview link: ${err.message}`);
   }, []);
 
+  const linkHoverHandlers = useLinkHover();
+
   const handlePreviewPagesClick = useCallback(event => {
     if (event.target.closest('.annotationLayer') || !window.getSelection()?.isCollapsed) return;
     const page = event.target.closest('.page');
-    if (!page) return;
-    for (const link of page.querySelectorAll('.linkAnnotation > a')) {
-      const rect = link.getBoundingClientRect();
-      if (
-        event.clientX >= rect.left && event.clientX <= rect.right &&
-        event.clientY >= rect.top && event.clientY <= rect.bottom
-      ) {
-        link.click();
-        break;
-      }
-    }
+    findLinkAtPoint(page, event.clientX, event.clientY)?.click();
   }, []);
 
   const title = previewState
@@ -256,6 +250,7 @@ export function LinkPreviewDialog({
             id="link-preview-pages"
             className="link-preview-pages"
             onClick={handlePreviewPagesClick}
+            {...linkHoverHandlers}
           >
             {previewState?.pages.map(slot => (
               <PdfPage

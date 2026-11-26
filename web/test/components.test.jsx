@@ -614,6 +614,13 @@ describe('PdfReader and PdfPage', () => {
     vi.spyOn(links[0], 'getBoundingClientRect').mockReturnValue({ left: 0, right: 10, top: 0, bottom: 10 });
     vi.spyOn(links[1], 'getBoundingClientRect').mockReturnValue({ left: 20, right: 60, top: 20, bottom: 60 });
     vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+
+    // Hovering over a link toggles page--link-hover on the hovered page
+    fireEvent.pointerMove(page1, { clientX: 30, clientY: 30, pointerType: 'mouse', buttons: 0 });
+    expect(page1).toHaveClass('page--link-hover');
+    fireEvent.pointerMove(page1, { clientX: 200, clientY: 200, pointerType: 'mouse', buttons: 0 });
+    expect(page1).not.toHaveClass('page--link-hover');
+
     fireEvent.click(page1, { clientX: 30, clientY: 30 });
     expect(linkClickSpy).toHaveBeenCalledTimes(1);
 
@@ -953,6 +960,11 @@ describe('LinkPreviewDialog', () => {
     const internalLink = previewPage2.querySelector('.linkAnnotation > a');
     vi.spyOn(internalLink, 'getBoundingClientRect').mockReturnValue({ left: 10, right: 80, top: 10, bottom: 40 });
     vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true });
+    // Hovering over link in preview toggles page--link-hover
+    fireEvent.pointerMove(previewPage2, { clientX: 30, clientY: 20, pointerType: 'mouse', buttons: 0 });
+    expect(previewPage2).toHaveClass('page--link-hover');
+    fireEvent.pointerLeave(previewPages);
+    expect(previewPage2).not.toHaveClass('page--link-hover');
     // Click outside link rect is a no-op
     fireEvent.click(previewPage2, { clientX: 200, clientY: 200 });
     expect(onNavigateInternal).not.toHaveBeenCalled();
@@ -971,7 +983,12 @@ describe('LinkPreviewDialog', () => {
     fireEvent.click(document.querySelector('.link-preview-surface'));
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(document.getElementById('link-preview-dialog'));
+    // Stale native close event while dialog is already open is ignored
+    const dialogEl = document.getElementById('link-preview-dialog');
+    fireEvent(dialogEl, new Event('close'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(dialogEl);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
