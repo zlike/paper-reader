@@ -52,6 +52,13 @@ export function CitationDialog({
     onClose();
   }, [onClose]);
 
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    dialog.addEventListener('close', handleNativeClose);
+    return () => dialog.removeEventListener('close', handleNativeClose);
+  }, [handleNativeClose]);
+
   const closeDialog = useCallback(() => {
     if (dialogRef.current?.open) {
       dialogRef.current.close();
@@ -123,7 +130,6 @@ export function CitationDialog({
       ref={dialogRef}
       id="citation-dialog"
       aria-labelledby="dialog-title"
-      onClose={handleNativeClose}
     >
       <div className="dialog-header">
         <h2 id="dialog-title">{title}</h2>

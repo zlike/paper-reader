@@ -42,6 +42,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryStatus, setLibraryStatus] = useState('');
   const [initialPosition, setInitialPosition] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [dialogState, setDialogState] = useState({
     open: false,
     ...CITATION_DIALOG,
@@ -255,14 +256,25 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
     });
   }, []);
 
-  const handleFindSelection = useCallback(() => {
+  const handleFindCitation = useCallback(text => {
     dismissSelection();
     setDialogState({
       open: true,
       ...CITATION_DIALOG,
-      initialText: selectedText
+      initialText: text
     });
-  }, [dismissSelection, selectedText]);
+  }, [dismissSelection]);
+
+  const handleFindSelection = useCallback(() => {
+    handleFindCitation(selectedText);
+  }, [handleFindCitation, selectedText]);
+
+  const handlePreviewOpenChange = useCallback(isOpen => {
+    setPreviewOpen(isOpen);
+    if (isOpen) {
+      dismissSelection();
+    }
+  }, [dismissSelection]);
 
   const handleCloseDialog = useCallback(() => {
     setDialogState(prev => (prev.open ? { ...prev, open: false } : prev));
@@ -282,7 +294,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
       <div className="layout">
         <LibraryDrawer
           open={libraryOpen}
-          dialogOpen={dialogState.open}
+          dialogOpen={dialogState.open || previewOpen}
           papers={papers}
           positions={readingState.positions}
           currentId={currentId}
@@ -296,6 +308,8 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
           zoom={zoom}
           initialPosition={initialPosition}
           onScroll={handleReaderScroll}
+          onFindCitation={handleFindCitation}
+          onPreviewOpenChange={handlePreviewOpenChange}
           pagesContainerRef={pagesContainerRef}
           readerApiRef={readerApiRef}
           pdfjsLoader={pdfjsLoader}
@@ -304,6 +318,7 @@ export function App({ pdfjsLoader = loadPdfjs } = {}) {
       <button
         id="find-selection"
         type="button"
+        className="find-selection-btn"
         hidden={!showFindSelection}
         onClick={handleFindSelection}
       >

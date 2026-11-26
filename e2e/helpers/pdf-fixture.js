@@ -4,9 +4,14 @@ function escapePdfText(text) {
 
 /**
  * Generates a minimal valid multi-page PDF 1.4 buffer with real Helvetica text
- * on each page so PDF.js renders both canvases and selectable text layers.
+ * on each page (and optional internal /Link annotations) so PDF.js renders
+ * canvases, selectable text layers, and interactive link annotations.
  */
-export function createTestPdf(pageTexts = ['Page 1 sample text', 'Page 2 sample text', 'Page 3 sample text']) {
+export function createTestPdf(
+  pageTexts = ['Page 1 sample text', 'Page 2 sample text', 'Page 3 sample text'],
+  options = {}
+) {
+  const { links = [] } = options;
   const objects = [];
   const addObj = body => {
     objects.push(body);
@@ -17,14 +22,36 @@ export function createTestPdf(pageTexts = ['Page 1 sample text', 'Page 2 sample 
   const pagesId = addObj('');   // placeholder 2
   const fontId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
 
-  const pageIds = [];
-  for (const text of pageTexts) {
-    const stream = `BT /F1 18 Tf 72 720 Td (${escapePdfText(text)}) Tj ET`;
+  // Pre-allocate page object IDs so link annotations can reference target pages.
+  const pageIds = pageTexts.map(() => addObj(''));
+
+  for (let idx = 0; idx < pageTexts.length; idx++) {
+    const entry = pageTexts[idx];
+    const lines = Array.isArray(entry)
+      ? entry
+      : [{ text: entry, x: 72, y: 720 }];
+    const stream = lines
+      .map(line => `BT /F1 18 Tf ${line.x ?? 72} ${line.y ?? 720} Td (${escapePdfText(line.text)}) Tj ET`)
+      .join('\n');
     const contentId = addObj(`<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream`);
-    const pageId = addObj(
-      `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`
-    );
-    pageIds.push(pageId);
+
+    const pageLinks = links.filter(link => link.fromPage === idx + 1);
+    const annotIds = pageLinks.map(link => {
+      const targetPageId = pageIds[link.toPage - 1];
+      const [x1, y1, x2, y2] = link.rect || [72, 700, 280, 745];
+      const dest = link.destY != null
+        ? `[${targetPageId} 0 R /XYZ ${link.destX ?? 72} ${link.destY} null]`
+        : `[${targetPageId} 0 R /Fit]`;
+      return addObj(
+        `<< /Type /Annot /Subtype /Link /Rect [${x1} ${y1} ${x2} ${y2}] /Border [0 0 0] /Dest ${dest} >>`
+      );
+    });
+
+    const annotsEntry = annotIds.length
+      ? ` /Annots [${annotIds.map(id => `${id} 0 R`).join(' ')}]`
+      : '';
+    objects[pageIds[idx] - 1] =
+      `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R${annotsEntry} >>`;
   }
 
   objects[catalogId - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;

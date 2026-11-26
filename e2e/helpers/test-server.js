@@ -95,8 +95,8 @@ export async function startTestServer() {
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
 
-  async function uploadPdf(title, pageTexts) {
-    const buffer = createTestPdf(pageTexts);
+  async function uploadPdf(title, pageTexts, pdfOptions) {
+    const buffer = createTestPdf(pageTexts, pdfOptions);
     const form = new FormData();
     form.append('title', title);
     form.append('file', new Blob([buffer], { type: 'application/pdf' }), `${title}.pdf`);

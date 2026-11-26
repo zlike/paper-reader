@@ -286,3 +286,205 @@ test('touch ergonomics and swipe-left drawer dismissal on iPad mini viewport', a
     await context.close();
   }
 });
+
+test('internal hyperlink opens LinkPreviewDialog without moving reader, supports Find cited paper, Jump to page, and dismiss flows', async ({ page }) => {
+  await server.uploadPdf(
+    'Hyperlinked Research Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 72, y: 720 },
+        { text: 'See reference [1] for details', x: 72, y: 400 }
+      ],
+      [{ text: 'Page 2: Methodology and background', x: 72, y: 720 }],
+      [
+        { text: 'Page 3: References', x: 72, y: 720 },
+        { text: '[1] Transformers for Everyone', x: 72, y: 180 }
+      ],
+      [{ text: 'Page 4: Continuation of reference [1]', x: 72, y: 720 }]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 3, rect: [72, 380, 340, 425], destX: 72, destY: 180 }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Hyperlinked Research Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const internalLink = page1.locator('.linkAnnotation > a').first();
+  await expect(internalLink).toBeAttached();
+
+  // Scroll reader down slightly while keeping the link on page 1 squarely in view
+  const progressSaved = page.waitForResponse(
+    res => res.url().includes('/progress') && res.request().method() === 'PUT'
+  );
+  await page.locator('#reader').evaluate(el => {
+    el.scrollTop = 120;
+  });
+  await progressSaved;
+  const scrollBefore = await page.locator('#reader').evaluate(el => el.scrollTop);
+  expect(scrollBefore).toBeGreaterThanOrEqual(100);
+
+  let clickOffset = 20;
+  const clickInternalLink = async () => {
+    const box = await internalLink.boundingBox();
+    // Vary x slightly across rapid consecutive clicks so Chromium doesn't coalesce them into a double-click text selection.
+    clickOffset += 25;
+    await page.mouse.click(box.x + clickOffset, box.y + box.height / 2);
+  };
+
+  // Click internal hyperlink on page 1 -> opens LinkPreviewDialog on Pages 3–4 without moving #reader
+  await clickInternalLink();
+  const previewDialog = page.locator('#link-preview-dialog');
+  await expect(previewDialog).toBeVisible();
+  await expect(page.locator('#link-preview-title')).toHaveText('Pages 3–4');
+  await expect(page.locator('#link-preview-pages .page[data-page="3"] canvas')).toBeVisible();
+  await expect(page.locator('#link-preview-pages .page[data-page="3"] .textLayer')).toContainText('Transformers for Everyone');
+
+  // Preview body auto-scrolled toward the bottom-of-page target
+  const previewScrollTop = await page.locator('#link-preview-body').evaluate(el => el.scrollTop);
+  expect(previewScrollTop).toBeGreaterThan(100);
+
+  // Main reader scrollTop did not change
+  const scrollWhileOpen = await page.locator('#reader').evaluate(el => el.scrollTop);
+  expect(Math.abs(scrollWhileOpen - scrollBefore)).toBeLessThan(2);
+
+  // Select reference text inside LinkPreviewDialog -> "Find cited paper" appears inside the modal
+  const refSpan = page.locator('#link-preview-pages .page[data-page="3"] .textLayer span', {
+    hasText: 'Transformers for Everyone'
+  }).first();
+  await expect(refSpan).toBeVisible();
+  await refSpan.evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  const modalFindBtn = page.locator('#link-preview-find-selection');
+  await expect(modalFindBtn).toBeVisible();
+  await modalFindBtn.click();
+
+  // CitationDialog opens on top pre-filled with the selected reference
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#dialog-title')).toHaveText('Find a cited paper');
+  await expect(page.locator('#citation-text')).toHaveValue(/Transformers for Everyone/);
+
+  // Search and download the cited paper without leaving current paper, then close CitationDialog
+  await page.locator('#search-citation').click();
+  await page.locator('.result').first().getByRole('button', { name: 'Download PDF' }).click();
+  await expect(page.locator('#search-status')).toContainText('PDF added to your library.');
+  await page.locator('#close-dialog').click();
+  await expect(page.locator('#citation-dialog')).not.toBeVisible();
+
+  // Main reader position is still preserved
+  expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
+
+  // 1. Dismiss via Close button
+  await page.locator('#close-link-preview').click();
+  await expect(previewDialog).not.toBeVisible();
+  expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
+
+  // 2. Dismiss via Escape key
+  await clickInternalLink();
+  await expect(previewDialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(previewDialog).not.toBeVisible();
+  expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
+
+  // 3. Dismiss via backdrop click
+  await clickInternalLink();
+  await expect(previewDialog).toBeVisible();
+  await page.mouse.click(5, 5);
+  await expect(previewDialog).not.toBeVisible();
+  expect(Math.abs(await page.locator('#reader').evaluate(el => el.scrollTop) - scrollBefore)).toBeLessThan(2);
+
+  // 4. "Jump to page" moves main reader to Page 3 and closes dialog
+  await clickInternalLink();
+  await expect(previewDialog).toBeVisible();
+  await page.locator('#link-preview-jump').click();
+  await expect(previewDialog).not.toBeVisible();
+  const scrollAfterJump = await page.locator('#reader').evaluate(el => el.scrollTop);
+  expect(scrollAfterJump).toBeGreaterThan(scrollBefore + 500);
+});
+
+test('hyperlink preview modal touch ergonomics on iPad mini viewport', async ({ browser }) => {
+  await server.uploadPdf(
+    'Tablet Hyperlink Paper',
+    [
+      [{ text: 'Page 1: Tap citation [1]', x: 72, y: 720 }],
+      [{ text: 'Page 2: Body', x: 72, y: 720 }],
+      [{ text: '[1] Transformers for Everyone', x: 72, y: 720 }]
+    ],
+    {
+      links: [
+        { fromPage: 1, toPage: 3, rect: [72, 700, 320, 745], destX: 72, destY: 720 }
+      ]
+    }
+  );
+
+  const context = await browser.newContext({
+    viewport: { width: 744, height: 1133 },
+    hasTouch: true,
+    isMobile: true
+  });
+  const page = await context.newPage();
+
+  try {
+    await page.goto(server.baseUrl);
+    await page.locator('.paper', { hasText: 'Tablet Hyperlink Paper' }).tap();
+    const page1 = page.locator('.page[data-page="1"]');
+    const internalLink = page1.locator('.linkAnnotation > a').first();
+    await expect(internalLink).toBeAttached();
+
+    const readerWidthBefore = await page.locator('#reader').evaluate(el => el.clientWidth);
+    const readerScrollBefore = await page.locator('#reader').evaluate(el => el.scrollTop);
+
+    // Tap link via page coordinates
+    const linkBox = await internalLink.boundingBox();
+    await page.touchscreen.tap(linkBox.x + linkBox.width / 2, linkBox.y + linkBox.height / 2);
+
+    const previewDialog = page.locator('#link-preview-dialog');
+    await expect(previewDialog).toBeVisible();
+    await expect(page.locator('#link-preview-title')).toHaveText('Page 3');
+
+    // Verify >= 44x44px touch targets & touch-action: manipulation on modal controls
+    for (const selector of ['#link-preview-jump', '#close-link-preview']) {
+      const metrics = await page.locator(selector).evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return { width: rect.width, height: rect.height, touchAction: getComputedStyle(el).touchAction };
+      });
+      expect(metrics.height, `${selector} height >= 44px`).toBeGreaterThanOrEqual(44);
+      expect(metrics.width, `${selector} width >= 44px`).toBeGreaterThanOrEqual(44);
+      expect(metrics.touchAction, `${selector} touch-action`).toBe('manipulation');
+    }
+
+    // Select text inside modal and verify Find cited paper button is >= 44px and visible
+    const refSpan = page.locator('#link-preview-pages .page[data-page="3"] .textLayer span').first();
+    await expect(refSpan).toBeVisible();
+    await refSpan.evaluate(el => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const findBtnBox = await page.locator('#link-preview-find-selection').boundingBox();
+    expect(findBtnBox.height).toBeGreaterThanOrEqual(44);
+    expect(findBtnBox.y + findBtnBox.height).toBeLessThanOrEqual(1133);
+
+    // Dismiss via tap and verify no layout or scroll disruption
+    await page.locator('#close-link-preview').tap();
+    await expect(previewDialog).not.toBeVisible();
+    expect(await page.locator('#reader').evaluate(el => el.clientWidth)).toBe(readerWidthBefore);
+    expect(await page.locator('#reader').evaluate(el => el.scrollTop)).toBe(readerScrollBefore);
+  } finally {
+    await context.close();
+  }
+});

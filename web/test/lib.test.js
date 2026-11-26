@@ -8,6 +8,7 @@ import {
 } from '../src/lib/api.js';
 import { loadPdfjs, resetPdfjsCache } from '../src/lib/pdfjs.js';
 import {
+  computePreviewTarget,
   destinationPosition,
   isSafeExternalUrl,
   isSupportedLink,
@@ -165,6 +166,51 @@ describe('pdf-links', () => {
     expect(() => destinationPosition(page, viewport, [0, { name: 'FitR' }, 1, 2])).toThrow('Invalid');
     expect(() => destinationPosition(page, viewport, [0, { name: 'Unknown' }])).toThrow('Unsupported');
     expect(() => destinationPosition(page, viewport, [0, { name: 'XYZ' }, Number.NaN, 100])).toThrow('Invalid');
+  });
+
+  it('computes preview scroll targets and adjacent next-page inclusion', () => {
+    const page = { view: [0, 0, 600, 800] };
+    const viewport = {
+      width: 600,
+      height: 800,
+      convertToViewportPoint: (x, y) => [x, 800 - y]
+    };
+
+    // Near top of page -> no adjacent next page
+    expect(computePreviewTarget(page, viewport, [0, { name: 'Fit' }], 1, 3)).toEqual({
+      x: 0,
+      y: 0,
+      scrollTop: 0,
+      scrollLeft: 0,
+      includeNextPage: false
+    });
+
+    // Near bottom of page (y=160 -> viewport y=640, 80% >= 60%) on non-last page -> includes next page
+    expect(computePreviewTarget(page, viewport, [1, { name: 'XYZ' }, 72, 160, null], 2, 4)).toEqual({
+      x: 72,
+      y: 640,
+      scrollTop: 616,
+      scrollLeft: 56,
+      includeNextPage: true
+    });
+
+    // Near bottom on last page -> does not include next page
+    expect(computePreviewTarget(page, viewport, [3, { name: 'XYZ' }, 72, 160, null], 4, 4)).toEqual({
+      x: 72,
+      y: 640,
+      scrollTop: 616,
+      scrollLeft: 56,
+      includeNextPage: false
+    });
+
+    // Out-of-bounds coordinates clamp cleanly to viewport bounds
+    expect(computePreviewTarget(page, viewport, [0, { name: 'XYZ' }, -50, -200, null], 1, 2)).toEqual({
+      x: 0,
+      y: 800,
+      scrollTop: 776,
+      scrollLeft: 0,
+      includeNextPage: true
+    });
   });
 });
 
