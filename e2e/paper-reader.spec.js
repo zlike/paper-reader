@@ -570,6 +570,91 @@ test('LinkPreviewDialog highlights cited paper title, preserves selection + Find
   await expect(page.locator('#citation-text')).toHaveValue('Attention Is All You Need');
 });
 
+test('LinkPreviewDialog accurately highlights right-column title in two-column academic bibliography with zero cross-column bleed', async ({ page }) => {
+  await server.uploadPdf(
+    'Two-Column ICML Bibliography Paper',
+    [
+      [
+        { text: 'Page 1: Introduction', x: 54, y: 720, size: 14 },
+        { text: 'Zero-shot prompting (Kojima et al., 2022) improves reasoning.', x: 54, y: 660, size: 11 },
+        { text: 'External code link: https://example.org/debate', x: 54, y: 615, size: 11 }
+      ],
+      [
+        // Full-width running header
+        { text: 'Improving Factuality and Reasoning through Multiagent Debate', x: 140, y: 750, size: 9 },
+        // Left column (x ~ 54..290)
+        { text: 'Chen, Y., Arkin, J., and Fan, C. Scalable', x: 54, y: 660, size: 9 },
+        { text: 'multi-robot collaboration with LLMs:', x: 64, y: 648, size: 9 },
+        { text: 'Centralized or decentralized? arXiv preprint', x: 64, y: 636, size: 9 },
+        { text: 'arXiv:2309.15943, 2023. 8', x: 64, y: 624, size: 9 },
+        // Right column (x ~ 308..558) with narrow ~18pt (~2.9%) gutter
+        { text: 'Kojima, T., Gu, S. S., Reid, M., Matsuo, Y.,', x: 308, y: 648, size: 9 },
+        { text: 'and Iwasawa, Y. Large language models are', x: 318, y: 636, size: 9 },
+        { text: 'zero-shot reasoners. arXiv preprint', x: 318, y: 624, size: 9 },
+        { text: 'arXiv:2205.11916, 2022. 1, 5, 7', x: 318, y: 612, size: 9 },
+        // Centered page number in gutter
+        { text: '2', x: 296, y: 40, size: 9 }
+      ]
+    ],
+    {
+      links: [
+        // Simulate hyperref left-margin offset (destX=288 is slightly left of right column x=308)
+        { fromPage: 1, toPage: 2, rect: [54, 648, 360, 675], destX: 288, destY: 654 },
+        { fromPage: 1, url: 'https://example.org/debate', rect: [54, 603, 360, 630] }
+      ]
+    }
+  );
+
+  await page.goto(server.baseUrl);
+  await page.locator('.paper', { hasText: 'Two-Column ICML Bibliography Paper' }).click();
+
+  const page1 = page.locator('.page[data-page="1"]');
+  const internalLink = page1.locator('.linkAnnotation > a[aria-label="Go to link in this paper"]');
+  const externalLink = page1.locator('.linkAnnotation > a[aria-label="Open external link in a new tab"]');
+  await expect(internalLink).toBeAttached();
+  await expect(externalLink).toBeAttached();
+
+  // External link does not open LinkPreviewDialog or add highlights
+  await page.route('https://example.org/**', route => route.fulfill({ status: 200, body: 'ok' }));
+  const popupPromise = page.waitForEvent('popup');
+  const extBox = await externalLink.boundingBox();
+  await page.mouse.click(extBox.x + 20, extBox.y + extBox.height / 2);
+  const popup = await popupPromise;
+  await popup.close();
+  await expect(page.locator('#link-preview-dialog')).not.toBeVisible();
+
+  // Internal link highlights ONLY Kojima's title with zero left-column bleed
+  const intBox = await internalLink.boundingBox();
+  await page.mouse.click(intBox.x + 20, intBox.y + intBox.height / 2);
+  await expect(page.locator('#link-preview-dialog')).toBeVisible();
+
+  const highlightMarks = page.locator('#link-preview-pages .page[data-page="2"] mark.link-target-highlight');
+  await expect(highlightMarks.first()).toBeVisible();
+
+  const highlightedText = (await highlightMarks.evaluateAll(nodes => nodes.map(n => n.textContent).join(' ')))
+    .replace(/\s+/g, ' ')
+    .trim();
+  expect(highlightedText).toBe('Large language models are zero-shot reasoners');
+  expect(highlightedText).not.toContain('arXiv');
+  expect(highlightedText).not.toContain('Centralized');
+  expect(highlightedText).not.toContain('Kojima');
+
+  // Selecting highlighted text still enables "Find cited paper"
+  await highlightMarks.first().evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  const modalFindBtn = page.locator('#link-preview-find-selection');
+  await expect(modalFindBtn).toBeVisible();
+  await modalFindBtn.click();
+  await expect(page.locator('#citation-dialog')).toBeVisible();
+  await expect(page.locator('#citation-text')).toHaveValue(/Large language models are/);
+});
+
 test('desktop mouse hover over PDF links shows pointer cursor in reader and link preview dialog without blocking text selection', async ({ page }) => {
   await server.uploadPdf(
     'Desktop Link Cursor Paper',

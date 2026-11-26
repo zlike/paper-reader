@@ -1,15 +1,25 @@
 export const HIGHLIGHT_CLASS = 'link-target-highlight';
 
-const MAX_ENTRY_LINES = 12;
+const MAX_ENTRY_LINES = 40;
 
-const NEW_REF_START_RE = /^\s*(?:\[\s*\d+[a-z]?\s*\]|\(\s*\d+[a-z]?\s*\)|\d{1,4}\.\s|\[\s*[A-Za-z][A-Za-z0-9+.-]{1,12}\d{2,4}[a-z]?\s*\])/;
-const LEADING_REF_MARKER_RE = /^\s*(?:(?:Reference|Ref\.?)\s+)?(?:\[\s*\d+[a-z]?\s*\]|\(\s*\d+[a-z]?\s*\)|\d{1,4}\.|\[\s*[A-Za-z][A-Za-z0-9+.-]{1,12}\d{2,4}[a-z]?\s*\])\s+/i;
+const NEW_REF_START_RE = /^\s*(?:\[\s*\d+[a-z]?\s*\]|\(\s*\d+[a-z]?\s*\)|(?!19\d{2}\.|20\d{2}\.)\d{1,3}\.\s|\[\s*[A-Za-z][A-Za-z0-9+.-]{1,12}\d{2,4}[a-z]?\s*\])/;
+const LEADING_REF_MARKER_RE = /^\s*(?:(?:Reference|Ref\.?)\s+)?(?:\[\s*\d+[a-z]?\s*\]|\(\s*\d+[a-z]?\s*\)|(?!19\d{2}\.|20\d{2}\.)\d{1,3}\.|\[\s*[A-Za-z][A-Za-z0-9+.-]{1,12}\d{2,4}[a-z]?\s*\])\s+/i;
 const STANDALONE_PAGE_NUM_RE = /^\s*\d{1,4}\s*$/;
 const SECTION_HEADING_RE = /^\s*(?:Appendix|References|Bibliography|Acknowledgments?|Acknowledgements?)\b/i;
 const PURE_YEAR_RE = /^(?:19|20)\d{2}[a-z]?$/;
 
 const NON_TERMINATING_ABBREV_RE = /(?:^|[\s(])(?:e\.g|i\.e|vs|Dr|Prof|Mr|Mrs|Ms|St|Jr|Sr|Fig|Eq|No|Vol|pp|ed|eds|Proc|Conf|Trans|Int|Symp|Dept|Univ|CoRR|arXiv)$/i;
 const SINGLE_INITIAL_RE = /(?:^|[\s(\-.])[A-Z]$/;
+const NEXT_INITIAL_RE = /^\s+(?:[A-Z]\.|-\s*[A-Z]\.)/;
+const AUTHOR_CONNECTOR_RE = /^\s+(?:and|&|et\s+al\.?)\b/i;
+const SURNAME_FOLLOW_RE = /^(?:(?:[Dd]e|[Dd]el|[Dd]ella|[Dd]al|[Vv]an|[Vv]on|[Dd]er|[Dd]en|[Ll]a|[Ll]e|[Dd]a|[Dd]i|[Dd]u|[Aa]l|[Bb]in|[Ss]t\.?)\s+)*[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ']+(?:-\s*[A-Za-zÀ-ÖØ-öø-ÿ']+)*(?:\s*(?:,|&|\band\b|\bet\s+al\.?|\.(?:\s|$)))/;
+const LAST_COMMA_INITIAL_RE = /(?:^|[\s;])([A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]{1,}),\s*(?:[A-Z]\.(?:\s*-\s*|\s+))*[A-Z]$/;
+const PRECEDED_BY_INITIAL_RE = /[A-Z]\.\s+(?:(?:[Dd]e|[Dd]el|[Dd]ella|[Dd]al|[Vv]an|[Vv]on|[Dd]er|[Dd]en|[Ll]a|[Ll]e|[Dd]a|[Dd]i|[Dd]u|[Aa]l|[Bb]in|[Ss]t\.?)\s+)*[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]{1,},\s*(?:[A-Z]\.(?:\s*-\s*|\s+))*[A-Z]$/;
+const AUTHOR_REF_START_RE = /^\s*[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]+,\s+[A-Z]\./;
+const VENUE_CUE_START_RE = /^\s+(?:in\s+|arXiv\b|https?:|doi:|pp\.|vol\.|url\b)/i;
+const TRAILING_DATE_RE = /,\s+(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:19|20)\d{2}[a-z]?$/i;
+const TRAILING_VENUE_CUE_RE = /,?\s+(?:URL\s+https?:|https?:\/\/|doi:\s*10\.|arXiv(?:\s+preprint)?(?:\s+arXiv)?:).*$/i;
+const TRAILING_BACKREF_RE = /\s+\d{1,3}(?:,\s*\d{1,3})*$/;
 
 function parseCssPixels(value, referenceSize = 0) {
   if (!value) return null;
@@ -86,7 +96,7 @@ export function extractTextItems(textLayer, pageIndex = 0) {
   return items;
 }
 
-function buildLineFromItems(lineItems) {
+function buildLineFromItems(lineItems, columnIndex = 0) {
   let text = '';
   const segments = [];
   let left = Infinity;
@@ -131,13 +141,109 @@ function buildLineFromItems(lineItems) {
     right,
     bottom,
     height: maxHeight,
-    pageIndex: lineItems[0].pageIndex
+    pageIndex: lineItems[0].pageIndex,
+    columnIndex
   };
 }
 
-export function groupItemsIntoLines(items, pageWidth = 0) {
-  if (!items.length) return [];
-  const sorted = [...items].sort((a, b) => a.top - b.top || a.left - b.left);
+export function detectColumns(items, pageWidth = 0) {
+  if (!items || items.length < 2) return null;
+  let maxRight = 0;
+  for (const item of items) {
+    if (item.right > maxRight) maxRight = item.right;
+  }
+  const width = pageWidth > 0 ? pageWidth : maxRight;
+  if (width <= 0) return null;
+
+  const candidates = [];
+  for (const item of items) {
+    const trimmed = item.text.trim();
+    if (!trimmed || STANDALONE_PAGE_NUM_RE.test(trimmed)) continue;
+    const itemWidth = item.right - item.left;
+    if (itemWidth > width * 0.48) continue;
+    candidates.push(item);
+  }
+  if (candidates.length < 2) return null;
+
+  const binCount = Math.ceil(width) + 1;
+  const occupancy = new Uint16Array(binCount);
+  for (const item of candidates) {
+    const start = Math.max(0, Math.floor(item.left));
+    const end = Math.min(binCount - 1, Math.ceil(item.right));
+    for (let x = start; x <= end; x++) {
+      occupancy[x]++;
+    }
+  }
+
+  const searchStart = Math.max(0, Math.floor(width * 0.28));
+  const searchEnd = Math.min(binCount - 1, Math.ceil(width * 0.72));
+  const minGutter = Math.max(8, width * 0.015);
+
+  const findBestValley = maxAllowed => {
+    let bestStart = -1;
+    let bestLen = 0;
+    let curStart = -1;
+    for (let x = searchStart; x <= searchEnd; x++) {
+      if (occupancy[x] <= maxAllowed) {
+        if (curStart === -1) curStart = x;
+      } else {
+        if (curStart !== -1 && x - curStart > bestLen) {
+          bestStart = curStart;
+          bestLen = x - curStart;
+        }
+        curStart = -1;
+      }
+    }
+    if (curStart !== -1 && searchEnd + 1 - curStart > bestLen) {
+      bestStart = curStart;
+      bestLen = searchEnd + 1 - curStart;
+    }
+    return bestLen >= minGutter ? { gapStart: bestStart, gapEnd: bestStart + bestLen } : null;
+  };
+
+  let valley = findBestValley(0);
+  if (!valley && candidates.length >= 10) {
+    valley = findBestValley(1);
+  }
+  if (!valley) return null;
+
+  const splitX = (valley.gapStart + valley.gapEnd) / 2;
+  let leftCount = 0;
+  let rightCount = 0;
+  let crossingCount = 0;
+  let leftMinY = Infinity;
+  let leftMaxY = -Infinity;
+  let rightMinY = Infinity;
+  let rightMaxY = -Infinity;
+
+  for (const item of items) {
+    const trimmed = item.text.trim();
+    if (!trimmed || STANDALONE_PAGE_NUM_RE.test(trimmed)) continue;
+    if (item.right <= splitX + 4) {
+      leftCount++;
+      leftMinY = Math.min(leftMinY, item.top);
+      leftMaxY = Math.max(leftMaxY, item.bottom);
+    } else if (item.left >= splitX - 4) {
+      rightCount++;
+      rightMinY = Math.min(rightMinY, item.top);
+      rightMaxY = Math.max(rightMaxY, item.bottom);
+    } else {
+      crossingCount++;
+    }
+  }
+
+  const minSide = items.length >= 8 ? 2 : 1;
+  if (leftCount < minSide || rightCount < minSide) return null;
+  const totalNonPage = leftCount + rightCount + crossingCount;
+  if (crossingCount > Math.max(2, Math.floor(totalNonPage * 0.12))) return null;
+  if (Math.min(leftMaxY, rightMaxY) < Math.max(leftMinY, rightMinY) - 20) return null;
+
+  return { splitX, gapStart: valley.gapStart, gapEnd: valley.gapEnd };
+}
+
+function groupBucketIntoLines(bucketItems, columnIndex, gutterThreshold) {
+  if (!bucketItems.length) return [];
+  const sorted = [...bucketItems].sort((a, b) => a.top - b.top || a.left - b.left);
   const bands = [];
 
   for (const item of sorted) {
@@ -153,43 +259,131 @@ export function groupItemsIntoLines(items, pageWidth = 0) {
     bands.push({ top: item.top, height: item.height, items: [item] });
   }
 
-  const gutterThreshold = pageWidth > 0 ? Math.max(24, pageWidth * 0.055) : 36;
   const lines = [];
-
   for (const band of bands) {
     const byX = band.items.sort((a, b) => a.left - b.left);
     let current = [byX[0]];
     for (let i = 1; i < byX.length; i++) {
       const prev = byX[i - 1];
       const item = byX[i];
-      if (item.left - prev.right > gutterThreshold) {
-        lines.push(buildLineFromItems(current));
+      if (gutterThreshold !== null && item.left - prev.right > gutterThreshold) {
+        lines.push(buildLineFromItems(current, columnIndex));
         current = [item];
       } else {
         current.push(item);
       }
     }
-    lines.push(buildLineFromItems(current));
+    lines.push(buildLineFromItems(current, columnIndex));
   }
 
+  return lines;
+}
+
+export function groupItemsIntoLines(items, pageWidth = 0) {
+  if (!items.length) return [];
+
+  const colSplit = detectColumns(items, pageWidth);
+  if (colSplit) {
+    const leftBucket = [];
+    const rightBucket = [];
+    const spanningBucket = [];
+
+    for (const item of items) {
+      if (item.right <= colSplit.splitX + 4) {
+        leftBucket.push(item);
+      } else if (item.left >= colSplit.splitX - 4) {
+        rightBucket.push(item);
+      } else {
+        spanningBucket.push(item);
+      }
+    }
+
+    const lines = [
+      ...groupBucketIntoLines(leftBucket, 0, null),
+      ...groupBucketIntoLines(rightBucket, 1, null),
+      ...groupBucketIntoLines(spanningBucket, -1, null)
+    ];
+    return lines.sort((a, b) => a.top - b.top || a.left - b.left);
+  }
+
+  const gutterThreshold = pageWidth > 0 ? Math.max(24, pageWidth * 0.055) : 36;
+  const lines = groupBucketIntoLines(items, 0, gutterThreshold);
   return lines.sort((a, b) => a.top - b.top || a.left - b.left);
+}
+
+function selectTargetColumn(lines, px) {
+  const columns = new Map();
+  for (const line of lines) {
+    const col = line.columnIndex ?? 0;
+    if (col < 0) continue;
+    let bounds = columns.get(col);
+    if (!bounds) {
+      bounds = { col, left: line.left, right: line.right };
+      columns.set(col, bounds);
+    } else {
+      bounds.left = Math.min(bounds.left, line.left);
+      bounds.right = Math.max(bounds.right, line.right);
+    }
+  }
+  if (columns.size <= 1) return null;
+
+  const colList = [...columns.values()].sort((a, b) => a.left - b.left);
+
+  // PDF hyperref XYZ destinations often place point.x ~15-30px left of the target column's left edge.
+  let bestMarginCol = null;
+  let bestMarginDist = Infinity;
+  for (const c of colList) {
+    const offsetLeft = c.left - px;
+    if (offsetLeft >= -12 && offsetLeft <= 42) {
+      const dist = Math.abs(offsetLeft);
+      if (dist < bestMarginDist) {
+        bestMarginDist = dist;
+        bestMarginCol = c.col;
+      }
+    }
+  }
+  if (bestMarginCol !== null) return bestMarginCol;
+
+  for (const c of colList) {
+    if (px >= c.left && px <= c.right) return c.col;
+  }
+
+  let closestCol = colList[0].col;
+  let closestDist = Infinity;
+  for (const c of colList) {
+    const dist = px < c.left ? c.left - px : px - c.right;
+    if (dist < closestDist) {
+      closestDist = dist;
+      closestCol = c.col;
+    }
+  }
+  return closestCol;
 }
 
 export function findTargetLineIndex(lines, point) {
   if (!lines.length) return -1;
   const px = Number.isFinite(point?.x) ? point.x : 0;
   const py = Number.isFinite(point?.y) ? point.y : 0;
+  const targetCol = selectTargetColumn(lines, px);
 
-  let bestIndex = 0;
+  let bestIndex = -1;
   let bestScore = Infinity;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (targetCol !== null && (line.columnIndex ?? 0) !== targetCol) continue;
+
     let dy = 0;
     if (py < line.top - 4) {
       dy = line.top - py;
     } else if (py > line.bottom + 4) {
       dy = (py - line.bottom) * 1.5;
+    }
+
+    // When a PDF destination sits below a section heading (e.g. "References"),
+    // prefer the first reference line below the heading rather than the heading itself.
+    if (py > line.bottom && SECTION_HEADING_RE.test(line.text.trim())) {
+      dy += Math.max(24, line.height * 2.5);
     }
 
     let dx = 0;
@@ -206,14 +400,17 @@ export function findTargetLineIndex(lines, point) {
     }
   }
 
-  return bestIndex;
+  return bestIndex >= 0 ? bestIndex : 0;
 }
 
-function isSameColumn(line, colMinX, colMaxX) {
+function isSameColumn(line, colMinX, colMaxX, targetCol) {
+  if (targetCol !== null) {
+    return (line.columnIndex ?? 0) === targetCol;
+  }
   return line.left < colMaxX && line.right > colMinX;
 }
 
-function collectPageContinuation(lines, startIndex, entryLines, typicalHeight, firstLine) {
+function collectPageContinuation(lines, startIndex, entryLines, typicalHeight, firstLine, targetCol = null) {
   const baseLeft = firstLine.left;
   let colMinX = baseLeft - 24;
   let colMaxX = firstLine.right + 40;
@@ -224,11 +421,22 @@ function collectPageContinuation(lines, startIndex, entryLines, typicalHeight, f
   for (let i = startIndex; i < lines.length && entryLines.length < MAX_ENTRY_LINES; i++) {
     const line = lines[i];
     const prevLine = entryLines[entryLines.length - 1];
-    if (line.top < prevLine.top - 2 || !isSameColumn(line, colMinX, colMaxX)) continue;
+    if (line.top < prevLine.top - 2 || !isSameColumn(line, colMinX, colMaxX, targetCol)) continue;
 
     const trimmed = line.text.trim();
-    if (STANDALONE_PAGE_NUM_RE.test(trimmed) || SECTION_HEADING_RE.test(trimmed)) {
+    if (SECTION_HEADING_RE.test(trimmed)) {
       hitBoundary = true;
+      break;
+    }
+    if (STANDALONE_PAGE_NUM_RE.test(trimmed)) {
+      // A standalone number at the very end of the page/column is a page footer,
+      // which should not block cross-page continuation of an incomplete entry.
+      const hasMoreInCol = lines.slice(i + 1).some(
+        nextLine => nextLine.top >= line.top - 2 && isSameColumn(nextLine, colMinX, colMaxX, targetCol)
+      );
+      if (hasMoreInCol) {
+        hitBoundary = true;
+      }
       break;
     }
     if (NEW_REF_START_RE.test(trimmed) && line.left <= baseLeft + 14) {
@@ -258,7 +466,55 @@ function collectPageContinuation(lines, startIndex, entryLines, typicalHeight, f
     colMaxX = Math.max(colMaxX, line.right + 40);
   }
 
-  return hitBoundary;
+  return { hitBoundary, hasHangingIndent };
+}
+
+function hasMultiColumnLines(lines) {
+  let hasCol0 = false;
+  let hasCol1 = false;
+  for (const line of lines) {
+    if (line.columnIndex === 0) hasCol0 = true;
+    else if (line.columnIndex === 1) hasCol1 = true;
+    if (hasCol0 && hasCol1) return true;
+  }
+  return false;
+}
+
+function shouldContinueAcrossBreak(entryLines, hasHangingIndent, continuationLines) {
+  if (!continuationLines.length) return false;
+  const firstNext = continuationLines[0];
+  const nextTrimmed = firstNext.text.trim();
+  if (!nextTrimmed || NEW_REF_START_RE.test(nextTrimmed) || SECTION_HEADING_RE.test(nextTrimmed)) {
+    return false;
+  }
+
+  // If the next column/page starts with an unindented first line of a hanging-indent entry,
+  // it is a new reference rather than a wrapped continuation.
+  if (continuationLines.length >= 2 && continuationLines[1].left > firstNext.left + 6) {
+    return false;
+  }
+
+  // If the next line starts with a new "Last, F." author entry and current entry looks complete.
+  if (AUTHOR_REF_START_RE.test(nextTrimmed)) {
+    const currentText = entryLines.map(l => l.text.trim()).join(' ');
+    if (/[.?!](?:\s+\d{1,3}(?:,\s*\d{1,3})*)?$/.test(currentText) || hasHangingIndent) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getColumnContinuationCandidates(lines, columnIndex) {
+  const filtered = columnIndex !== null
+    ? lines.filter(l => (l.columnIndex ?? 0) === columnIndex)
+    : lines.filter(l => (l.columnIndex ?? 0) >= 0);
+
+  let startIdx = 0;
+  while (startIdx < filtered.length && STANDALONE_PAGE_NUM_RE.test(filtered[startIdx].text.trim())) {
+    startIdx++;
+  }
+  return filtered.slice(startIdx);
 }
 
 export function collectReferenceEntry(targetLines, targetIndex, nextPageLines = []) {
@@ -269,25 +525,43 @@ export function collectReferenceEntry(targetLines, targetIndex, nextPageLines = 
   const firstLine = targetLines[targetIndex];
   const entryLines = [firstLine];
   const typicalHeight = firstLine.height;
+  const isTargetMultiCol = hasMultiColumnLines(targetLines);
+  const targetCol = isTargetMultiCol ? (firstLine.columnIndex ?? 0) : null;
 
-  const hitBoundary = collectPageContinuation(
+  const { hitBoundary, hasHangingIndent } = collectPageContinuation(
     targetLines,
     targetIndex + 1,
     entryLines,
     typicalHeight,
-    firstLine
+    firstLine,
+    targetCol
   );
 
-  if (!hitBoundary && nextPageLines.length > 0 && entryLines.length < MAX_ENTRY_LINES) {
-    let startIdx = 0;
-    while (startIdx < nextPageLines.length && STANDALONE_PAGE_NUM_RE.test(nextPageLines[startIdx].text.trim())) {
-      startIdx++;
-    }
-    const firstNext = nextPageLines[startIdx];
-    const nextTrimmed = firstNext?.text.trim() || '';
-    if (nextTrimmed && !NEW_REF_START_RE.test(nextTrimmed) && !SECTION_HEADING_RE.test(nextTrimmed)) {
-      entryLines.push(firstNext);
-      collectPageContinuation(nextPageLines, startIdx + 1, entryLines, typicalHeight, firstNext);
+  if (!hitBoundary && entryLines.length < MAX_ENTRY_LINES) {
+    if (isTargetMultiCol && targetCol === 0) {
+      // Continue from bottom of left column to top of right column on the same page
+      const rightColCandidates = getColumnContinuationCandidates(targetLines, 1);
+      if (shouldContinueAcrossBreak(entryLines, hasHangingIndent, rightColCandidates)) {
+        const firstNext = rightColCandidates[0];
+        entryLines.push(firstNext);
+        collectPageContinuation(rightColCandidates, 1, entryLines, typicalHeight, firstNext, 1);
+      }
+    } else if (nextPageLines.length > 0) {
+      // Continue from bottom of last column onto top of first column of next page
+      const isNextMultiCol = hasMultiColumnLines(nextPageLines);
+      const nextCandidates = getColumnContinuationCandidates(nextPageLines, isNextMultiCol ? 0 : null);
+      if (shouldContinueAcrossBreak(entryLines, hasHangingIndent, nextCandidates)) {
+        const firstNext = nextCandidates[0];
+        entryLines.push(firstNext);
+        collectPageContinuation(
+          nextCandidates,
+          1,
+          entryLines,
+          typicalHeight,
+          firstNext,
+          isNextMultiCol ? 0 : null
+        );
+      }
     }
   }
 
@@ -322,6 +596,52 @@ function trimRange(text, start, end) {
   return s < e ? { start: s, end: e } : null;
 }
 
+function refineTitleRange(text, start, end) {
+  let range = trimRange(text, start, end);
+  if (!range) return null;
+
+  let slice = text.slice(range.start, range.end);
+  const venueMatch = TRAILING_VENUE_CUE_RE.exec(slice);
+  if (venueMatch && venueMatch.index > 0) {
+    range = trimRange(text, range.start, range.start + venueMatch.index);
+    if (!range) return null;
+    slice = text.slice(range.start, range.end);
+  }
+
+  const dateMatch = TRAILING_DATE_RE.exec(slice);
+  if (dateMatch && dateMatch.index > 0) {
+    range = trimRange(text, range.start, range.start + dateMatch.index);
+    if (!range) return null;
+    slice = text.slice(range.start, range.end);
+  }
+
+  const backrefMatch = TRAILING_BACKREF_RE.exec(slice);
+  if (backrefMatch && backrefMatch.index > 0 && /[.?!]$/.test(slice.slice(0, backrefMatch.index))) {
+    range = trimRange(text, range.start, range.start + backrefMatch.index);
+  }
+
+  return range;
+}
+
+function shouldSkipSingleInitialPeriod(before, after) {
+  if (NEXT_INITIAL_RE.test(after) || AUTHOR_CONNECTOR_RE.test(after)) {
+    return true;
+  }
+
+  const afterTrim = after.trimStart();
+  if (!SURNAME_FOLLOW_RE.test(afterTrim)) {
+    return false;
+  }
+
+  // In "Last, F." format, the initial is at the end of the author name, so it terminates
+  // the author list unless it was actually preceded by a first initial ("K. He, X. Zhang").
+  if (LAST_COMMA_INITIAL_RE.test(before) && !PRECEDED_BY_INITIAL_RE.test(before)) {
+    return false;
+  }
+
+  return true;
+}
+
 function findSentenceEnd(text, fromIndex) {
   for (let i = fromIndex; i < text.length; i++) {
     const ch = text[i];
@@ -330,11 +650,19 @@ function findSentenceEnd(text, fromIndex) {
     const atBoundary = next === undefined || /\s/.test(next);
     if (!atBoundary) continue;
 
+    const after = text.slice(i + 1);
     if (ch === '.') {
       const before = text.slice(fromIndex, i);
-      if (/\d$/.test(before) && /^\d/.test(text.slice(i + 1))) continue;
-      if (SINGLE_INITIAL_RE.test(before)) continue;
+      if (/\d$/.test(before) && /^\d/.test(after)) continue;
+      if (SINGLE_INITIAL_RE.test(before) && shouldSkipSingleInitialPeriod(before, after)) continue;
       if (NON_TERMINATING_ABBREV_RE.test(before)) continue;
+    } else {
+      const before = text.slice(fromIndex, i);
+      const isShortTitlePrefix = before.trim().length <= 12 && /^\s+[A-Za-z]/.test(after);
+      if ((/^\s+[a-z]/.test(after) || isShortTitlePrefix) && !VENUE_CUE_START_RE.test(after)) {
+        // Internal '!' or '?' inside a title (e.g. "Explain yourself! leveraging..." or "WT5?! Training...")
+        continue;
+      }
     }
     return i;
   }
@@ -350,7 +678,8 @@ function splitCitationSegments(text, startOffset) {
     if (cursor >= text.length) break;
 
     const end = findSentenceEnd(text, cursor);
-    const trimmed = trimRange(text, cursor, end);
+    const includeEndPunct = end < text.length && (text[end] === '?' || text[end] === '!');
+    const trimmed = trimRange(text, cursor, includeEndPunct ? end + 1 : end);
     if (trimmed) {
       segments.push({ ...trimmed, text: text.slice(trimmed.start, trimmed.end) });
     }
@@ -371,17 +700,19 @@ function isReasonableTitle(candidate) {
 export function extractTitleRange(entryText) {
   if (!entryText || typeof entryText !== 'string') return null;
 
-  // 1. Quoted titles: "Title", “Title”, or ``Title''
+  // 1. Quoted titles: "Title", “Title”, or ``Title'' (must begin at a citation boundary)
   const quotePatterns = [
-    /"([^"\n]{6,})"/,
-    /“([^”\n]{6,})”/,
-    /``([^'\n]{6,})''/
+    /(?:^|[\].,;):]\s+)"([^"\n]{6,})"/,
+    /(?:^|[\].,;):]\s+)“([^”\n]{6,})”/,
+    /(?:^|[\].,;):]\s+)``([^'\n]{6,})''/
   ];
   for (const pattern of quotePatterns) {
     const match = pattern.exec(entryText);
     if (match) {
-      const openLen = pattern.source.startsWith('``') ? 2 : 1;
-      const range = trimRange(entryText, match.index + openLen, match.index + openLen + match[1].length);
+      const openLen = pattern.source.includes('``') ? 2 : 1;
+      const closeLen = openLen;
+      const quoteStart = match.index + match[0].length - match[1].length - closeLen;
+      const range = trimRange(entryText, quoteStart, quoteStart + match[1].length);
       if (range && isReasonableTitle(entryText.slice(range.start, range.end))) {
         return range;
       }
@@ -394,7 +725,8 @@ export function extractTitleRange(entryText) {
   if (yearMatch) {
     const afterYear = yearMatch.index + yearMatch[0].length;
     const sentenceEnd = findSentenceEnd(entryText, afterYear);
-    const range = trimRange(entryText, afterYear, sentenceEnd);
+    const includeEndPunct = sentenceEnd < entryText.length && (entryText[sentenceEnd] === '?' || entryText[sentenceEnd] === '!');
+    const range = refineTitleRange(entryText, afterYear, includeEndPunct ? sentenceEnd + 1 : sentenceEnd);
     if (range && isReasonableTitle(entryText.slice(range.start, range.end))) {
       return range;
     }
@@ -412,8 +744,9 @@ export function extractTitleRange(entryText) {
     const afterEtAl = entryText.slice(titleStart);
     const venueComma = /,\s+(?:in\s+|Proc\.|NeurIPS|ICML|ICLR|CVPR|ACL|EMNLP|AAAI|IEEE|ACM|arXiv|Vol\.|pp\.|(?:19|20)\d{2}\b)/i.exec(afterEtAl);
     const sentenceEnd = findSentenceEnd(entryText, titleStart);
-    const end = venueComma ? Math.min(titleStart + venueComma.index, sentenceEnd) : sentenceEnd;
-    const range = trimRange(entryText, titleStart, end);
+    const includeEndPunct = sentenceEnd < entryText.length && (entryText[sentenceEnd] === '?' || entryText[sentenceEnd] === '!');
+    const rawEnd = venueComma ? Math.min(titleStart + venueComma.index, sentenceEnd) : (includeEndPunct ? sentenceEnd + 1 : sentenceEnd);
+    const range = refineTitleRange(entryText, titleStart, rawEnd);
     if (range && isReasonableTitle(entryText.slice(range.start, range.end))) {
       return range;
     }
@@ -426,15 +759,18 @@ export function extractTitleRange(entryText) {
     if (PURE_YEAR_RE.test(segments[titleIdx].text) && segments.length >= 3) {
       titleIdx = 2;
     }
-    const candidate = segments[titleIdx];
-    if (isReasonableTitle(candidate.text)) {
-      return { start: candidate.start, end: candidate.end };
+    const candidate = refineTitleRange(entryText, segments[titleIdx].start, segments[titleIdx].end);
+    if (candidate && isReasonableTitle(entryText.slice(candidate.start, candidate.end))) {
+      return candidate;
     }
   }
 
   // 6. Single-segment reference with leading citation marker (e.g. "[1] Transformers for Everyone")
-  if (markerMatch && segments.length === 1 && isReasonableTitle(segments[0].text)) {
-    return { start: segments[0].start, end: segments[0].end };
+  if (markerMatch && segments.length === 1) {
+    const candidate = refineTitleRange(entryText, segments[0].start, segments[0].end);
+    if (candidate && isReasonableTitle(entryText.slice(candidate.start, candidate.end))) {
+      return candidate;
+    }
   }
 
   return null;
